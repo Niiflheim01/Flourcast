@@ -84,4 +84,4 @@ This project is licensed under the MIT License.
 
 ---
 
-**Flourcast** - Bake Good Decisions 🥖✨
+**Flourcast** - Bake Good Decisions.
