@@ -1,4 +1,4 @@
-# Flourcast - Bakery Management System
+# Flourcast: An Automated Production and Demand Forecasting System
 
 Flourcast is a comprehensive mobile-first Android application designed for small, local bakeries like Panmasa Patisserie. It helps businesses track sales, manage inventory, and predict daily demand to minimize waste and stockouts.
 
