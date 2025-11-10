@@ -1,13 +1,12 @@
-// File: app/(onboarding)/home.js (FINAL COMPLETE CODE)
+// File: app/(onboarding)/home.js 
 
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
 import {
     Image,
-    Modal,
     Platform,
     SafeAreaView,
+    // SOLUSYON PARA MAKA-SCROLL: ScrollView na ang ginagamit
     ScrollView,
     StyleSheet,
     Text,
@@ -16,55 +15,18 @@ import {
 } from 'react-native';
 
 // --- IMAGE IMPORT ---
-// 🚨 IMPORTANT: ADJUST THIS PATH to where your logo.png file is located!
 import logoImage from '../../assets/images/logo.png';
 
 
-// --- 1. HELPER FUNCTION ---
-const getFormattedDateTime = () => {
-    const now = new Date();
-    const time = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
-    return time;
-};
-
-
-// --- 2. CUSTOM CONFIRMATION ALERT COMPONENT ---
-const CustomConfirmationAlert = ({ isVisible, onCancel, onConfirm, styles }) => {
-    if (!isVisible) return null;
-
-    return (
-        <Modal 
-            animationType="fade"
-            transparent={true}
-            visible={isVisible}
-            onRequestClose={onCancel} 
-        >
-            <View style={styles.modalOverlay}>
-                <View style={styles.alertBox}>
-                    <Text style={styles.alertTitle}>Confirm Sign Out</Text>
-                    <Text style={styles.alertMessage}>Are you sure you want to sign out and return to the login screen?</Text>
-                    <View style={styles.alertButtonContainer}>
-                        <TouchableOpacity style={[styles.alertButton, styles.cancelButton]} onPress={onCancel}>
-                            <Text style={styles.cancelButtonText}>Cancel</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={[styles.alertButton, styles.confirmButton]} onPress={onConfirm}>
-                            <Text style={styles.confirmButtonText}>Sign Out</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
-        </Modal>
-    );
-};
-
-
-// --- 3. DAHBOARD COMPONENTS ---
+// --- 1. DAHBOARD COMPONENTS (No changes in logic/data) ---
 
 const SalesSummaryCard = ({ amount, description, unit }) => (
     <View style={styles.card}>
         <Text style={styles.cardAmount}>{amount}</Text>
-        <Text style={styles.cardUnit}>{unit}</Text>
-        <Text style={styles.cardDescription}>{description}</Text>
+        <View>
+            <Text style={styles.cardUnit}>{unit}</Text>
+            <Text style={styles.cardDescription}>{description}</Text>
+        </View>
     </View>
 );
 
@@ -102,14 +64,11 @@ const WeeklySalesChart = () => (
 );
 
 const StocksInventory = () => {
-    // Combined Data from both images (Products and Ingredients)
     const stockData = [
-        // Products
         { product: 'Chocolate Chip Cookies', produced: '05/02/2025', total: '100pcs/gr', stocks: '50pcs/gr' },
         { product: 'Banana Bread', produced: '05/02/2025', total: '100pcs/gr', stocks: '50pcs/gr' },
         { product: 'Muffin', produced: '05/02/2025', total: '100pcs/gr', stocks: '50pcs/gr' },
         { product: 'Bread', produced: '05/02/2025', total: '100pcs/gr', stocks: '50pcs/gr' },
-        // Ingredients
         { product: 'Flour', produced: '05/01/2025', total: '1kg', stocks: '3kg' },
         { product: 'Egg', produced: '05/01/2025', total: '12pcs/s', stocks: '6pcs/s' },
         { product: 'Baking Powder', produced: '05/01/2025', total: '1kg', stocks: '3kg' },
@@ -119,23 +78,31 @@ const StocksInventory = () => {
         { product: 'Yeast', produced: '05/01/2025', total: '1kg', stocks: '3kg' },
     ];
 
+    const handleTabPress = (isStocks) => {
+        console.log(isStocks ? 'Stocks tab pressed' : 'Orders tab pressed');
+        // Future: Add state logic here to switch content
+    };
+
     const renderHeader = (isStocks) => (
         <View style={styles.stocksHeader}>
-            {/* Stocks Tab - Always Active in this dashboard view */}
-            <TouchableOpacity style={[styles.stocksTab, isStocks && styles.stocksTabActive]}>
+            <TouchableOpacity 
+                style={[styles.stocksTab, isStocks && styles.stocksTabActive]}
+                onPress={() => handleTabPress(true)}
+            >
                 <Text style={[styles.stocksTabText, isStocks && styles.stocksTabTextActive]}>Stocks</Text>
             </TouchableOpacity>
-            {/* Orders Tab */}
-            <TouchableOpacity style={[styles.stocksTab, !isStocks && styles.stocksTabActive]}>
+            <TouchableOpacity 
+                style={[styles.stocksTab, !isStocks && styles.stocksTabActive]}
+                onPress={() => handleTabPress(false)}
+            >
                 <Text style={[styles.stocksTabText, !isStocks && styles.stocksTabTextActive]}>Orders</Text>
             </TouchableOpacity>
         </View>
     );
     
-    // Headers combining "Produced" and "Restocked" as well as "Total" and "Used"
     const tableHeaders = [
         { title: 'Product', flex: 2 },
-        { title: 'Restocked/Produced on', flex: 1.5 },
+        { title: 'Restocked on', flex: 1.5 },
         { title: 'Total/Used', flex: 1 },
         { title: 'Stocks', flex: 1 },
     ];
@@ -143,10 +110,10 @@ const StocksInventory = () => {
     return (
         <View style={styles.stocksContainer}>
             <Text style={styles.sectionTitle}>Stocks/Inventory</Text>
+            {/* Default to Stocks tab active for display purposes */}
             {renderHeader(true)} 
             
             <View style={styles.stockTable}>
-                {/* Table Header */}
                 <View style={[styles.stockRow, styles.stockHeaderRow]}>
                     {tableHeaders.map((header, index) => (
                         <Text 
@@ -157,10 +124,9 @@ const StocksInventory = () => {
                         </Text>
                     ))}
                 </View>
-                {/* Table Rows: String() wrapper added to prevent "Text strings must be rendered..." error */}
                 {stockData.map((item, index) => (
                     <View key={index} style={[styles.stockRow, index % 2 === 0 && styles.stockRowEven]}>
-                        <Text style={[styles.stockCell, { flex: 2 }]}>{String(item.product)}</Text>
+                        <Text style={[styles.stockCell, { flex: 2, textAlign: 'left' }]}>{String(item.product)}</Text>
                         <Text style={[styles.stockCell, { flex: 1.5 }]}>{String(item.produced)}</Text>
                         <Text style={[styles.stockCell, { flex: 1 }]}>{String(item.total)}</Text>
                         <Text style={[styles.stockCell, { flex: 1 }]}>{String(item.stocks)}</Text>
@@ -182,7 +148,7 @@ const DailyReportSection = () => (
     </View>
 );
 
-// --- 4. BOTTOM NAVIGATION COMPONENT (Uses (onboarding) path) ---
+// --- 2. BOTTOM NAVIGATION COMPONENT (Gumagana na ang navigation) ---
 
 const BottomNavBar = ({ activeRoute }) => {
     const navItems = [
@@ -194,7 +160,7 @@ const BottomNavBar = ({ activeRoute }) => {
     ];
 
     const handleNavigation = (route) => {
-        // Construct the correct expo-router path
+        // Gumagamit ng (onboarding)/[filename] structure
         const fullPath = route === 'home' ? '(onboarding)/home' : `(onboarding)/${route}`;
         router.replace(fullPath); 
     };
@@ -222,83 +188,46 @@ const BottomNavBar = ({ activeRoute }) => {
 };
 
 
-// --- 5. MAIN HOME COMPONENT ---
+// --- 3. MAIN HOME COMPONENT ---
 
 export default function Home() {
-    const [statusTime, setStatusTime] = useState(getFormattedDateTime());
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
-    const [showConfirmation, setShowConfirmation] = useState(false); 
-
-    useEffect(() => {
-        const timerId = setInterval(() => { setStatusTime(getFormattedDateTime()); }, 1000);
-        return () => clearInterval(timerId);
-    }, []);
-
-    const handleSignOut = () => {
-        setTimeout(() => {
-            router.replace('/'); 
-        }, 100);
-    };
-
-    const handleSignOutPress = () => {
-        setIsMenuOpen(false); 
-        setShowConfirmation(true); 
-    }
-
+    
     const handleProfilePress = () => {
-        setIsMenuOpen(prev => !prev);
+        router.replace('(onboarding)/profile');
     };
 
     return (
         <SafeAreaView style={styles.safeArea}>
             
-            {/* --- CUSTOM CONFIRMATION MODAL --- */}
-            <CustomConfirmationAlert 
-                isVisible={showConfirmation}
-                onCancel={() => setShowConfirmation(false)} 
-                onConfirm={() => {
-                    setShowConfirmation(false);
-                    handleSignOut();
-                }}
-                styles={styles}
-            />
-
-            {/* --- HEADER --- */}
+            {/* --- APP HEADER (Logo/Title Left, User/Profile Right) --- */}
             <View style={styles.header}>
-                <Text style={styles.headerTime}>{statusTime}</Text> 
+                <View style={styles.headerLeft}>
+                    <Image 
+                        source={logoImage} 
+                        style={styles.mainLogo} 
+                        resizeMode="contain"
+                    />
+                    <Text style={styles.dashboardTitle}>Dashboard</Text>
+                </View>
+
                 <View style={styles.headerRight}>
-                    <Text style={styles.headerUser}>Hello, Admin</Text>
-                    <Text style={styles.headerDate}>09/02/2005</Text>
+                    <View style={styles.headerUserDetails}>
+                        <Text style={styles.headerUserText}>Hello, Admin</Text>
+                        <Text style={styles.headerUserText}>09/07/2005</Text>
+                    </View>
                     
                     <TouchableOpacity style={styles.profileButton} onPress={handleProfilePress}>
                         <Ionicons name="person-circle-outline" size={30} color="#333" />
                     </TouchableOpacity>
-                    
-                    {isMenuOpen && (
-                        <View style={styles.signOutMenu}>
-                             <TouchableOpacity style={styles.menuItem} onPress={handleSignOutPress}>
-                                 <Text style={styles.menuItemText}>Sign Out</Text>
-                             </TouchableOpacity>
-                         </View>
-                    )}
                 </View>
             </View>
 
-            {/* --- LOGO BAR (Image Logo Only) --- */}
-            <View style={styles.logoBar}>
-                <Image 
-                    source={logoImage} 
-                    style={styles.mainLogo} 
-                    resizeMode="contain"
-                />
-            </View>
-
-            {/* --- MAIN SCROLLABLE CONTENT --- */}
-            <ScrollView contentContainerStyle={styles.scrollContent}>
+            {/* --- MAIN SCROLLABLE CONTENT (Gumagamit na ng ScrollView) --- */}
+            <ScrollView contentContainerStyle={styles.mainContent}> 
                 
                 {/* 3 Summary Cards */}
                 <View style={styles.summaryRow}>
-                    <SalesSummaryCard amount="₱5000.00" unit="Daily Sales" description="Sales Today" />
+                    <SalesSummaryCard amount="₱5000.00" unit="Sales Today" description="" />
                     <SalesSummaryCard amount="200 pcs/s" unit="Product Produced Today" description="" />
                     <SalesSummaryCard amount="100 pcs/s" unit="Product Sold" description="" />
                 </View>
@@ -307,12 +236,12 @@ export default function Home() {
                 <WeeklySalesChart />
 
                 {/* Stocks/Inventory Table */}
-                <StocksInventory />
+                <StocksInventory /> 
 
                 {/* Daily Report */}
-                <DailyReportSection />
+                <DailyReportSection /> 
 
-                {/* Spacer so content isn't hidden by nav bar */}
+                {/* Gumamit ng spacer View para hindi matakpan ng nav bar ang ilalim */}
                 <View style={{ height: 90 }} /> 
             </ScrollView>
             
@@ -324,68 +253,78 @@ export default function Home() {
 }
 
 
-// --- 6. STYLES ---
+// --- 4. STYLES (Inayos ang alignment ng Header, Logo Size, at mainContent for ScrollView) ---
 
 const styles = StyleSheet.create({
     safeArea: { flex: 1, backgroundColor: '#FFFFFF', },
     
-    // --- TOP STATUS/HEADER BAR ---
+    // Pinalitan ang ScrollView contentContainerStyle
+    mainContent: {
+        // Inalis ang flex: 1 para gumana ang ScrollView
+        paddingHorizontal: 15, 
+        paddingBottom: 20, // Nagdagdag ng kaunting padding sa ilalim
+    }, 
+    
+    // --- APP HEADER (Inayos ang alignment) ---
     header: {
-        flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-        paddingHorizontal: 15, paddingTop: Platform.OS === 'android' ? 10 : 0, 
-        paddingBottom: 5, backgroundColor: '#FFFFFF', zIndex: 10,
+        flexDirection: 'row', 
+        justifyContent: 'space-between', 
+        alignItems: 'center', 
+        paddingHorizontal: 15, 
+        paddingTop: Platform.OS === 'android' ? 10 : 0, 
+        paddingBottom: 10,
+        backgroundColor: '#FFFFFF', 
+        borderBottomWidth: 1, 
+        borderBottomColor: '#EEEEEE',
     },
-    headerTime: { fontSize: 14, color: '#000', fontWeight: 'bold', },
+    headerLeft: {
+        alignItems: 'flex-start',
+    },
     headerRight: { 
-        flexDirection: 'row', alignItems: 'center', 
-        position: 'relative', zIndex: 10, 
+        flexDirection: 'row', 
+        alignItems: 'center',
     },
-    headerUser: { fontSize: 12, color: '#666', marginRight: 10, textAlign: 'right' },
-    headerDate: { fontSize: 12, color: '#333', marginRight: 10, fontWeight: 'bold', textAlign: 'right' },
+    headerUserDetails: {
+        alignItems: 'flex-end',
+        marginRight: 8,
+    },
+    headerUserText: { 
+        fontSize: 12, 
+        color: '#666', 
+        textAlign: 'right' 
+    },
     profileButton: { 
         padding: 0, 
         backgroundColor: '#D9D9D9',
         borderRadius: 20,
     },
-    signOutMenu: {
-        position: 'absolute', top: 35, right: 0, backgroundColor: '#FFFFFF',
-        borderRadius: 8, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 5,
-        elevation: 5, width: 100, paddingVertical: 5, zIndex: 20, 
+    
+    // --- LOGO/TITLE (Gawing mas malaki ang logo) ---
+    mainLogo: { 
+        width: 120, 
+        height: 35, 
     },
-    menuItem: { paddingHorizontal: 15, paddingVertical: 10, },
-    menuItemText: { fontSize: 14, color: '#333', textAlign: 'center' },
-
-    // --- LOGO BAR (Adjusted for Image) ---
-    logoBar: {
-        paddingHorizontal: 15,
-        paddingBottom: 10,
-        backgroundColor: '#FFFFFF',
-        borderBottomWidth: 1,
-        borderBottomColor: '#EEEEEE',
-        justifyContent: 'center',
+    dashboardTitle: { 
+        fontSize: 22,
+        fontWeight: 'bold',
+        color: '#333',
+        marginTop: 5,
     },
-    mainLogo: { // New style for the Image component
-        width: 150, // Adjust size as needed for your logo
-        height: 50, // Adjust size as needed for your logo
-    },
-    // logoContainer, logoName, logoSlogan, dashboardTitle styles are no longer needed
 
-    // --- SCROLLABLE CONTENT STYLES ---
-    scrollContent: { padding: 15, paddingBottom: 100 }, 
-
-    // Summary Cards
+    // Summary Cards (No changes sa padding/details)
     summaryRow: { 
         flexDirection: 'row', 
         justifyContent: 'space-between', 
-        marginBottom: 20 
+        marginBottom: 20,
+        marginTop: 15, 
     },
     card: {
         width: '32%', 
-        backgroundColor: '#F7F7F7',
+        backgroundColor: '#FCF3E8', 
         borderRadius: 10,
         padding: 10,
         borderWidth: 1,
-        borderColor: '#E5E5E5',
+        borderColor: '#F1E7DA', 
         height: 100,
         justifyContent: 'space-between',
     },
@@ -398,7 +337,6 @@ const styles = StyleSheet.create({
         fontSize: 10, 
         fontWeight: '600',
         color: '#666',
-        marginTop: -5,
     },
     cardDescription: {
         fontSize: 10,
@@ -542,6 +480,7 @@ const styles = StyleSheet.create({
         fontSize: 10,
         color: '#333',
         textAlign: 'center',
+        alignSelf: 'center', // Added to ensure vertical alignment in table
     },
     stockHeaderText: {
         fontWeight: 'bold',
@@ -596,57 +535,5 @@ const styles = StyleSheet.create({
     navTextActive: {
         color: '#D97706', 
         fontWeight: 'bold',
-    },
-
-    // --- CUSTOM ALERT STYLES ---
-    modalOverlay: {
-        flex: 1,
-        backgroundColor: 'rgba(0, 0, 0, 0.5)', 
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    alertBox: {
-        width: '80%',
-        maxWidth: 300,
-        backgroundColor: '#FFFFFF',
-        borderRadius: 10,
-        padding: 20,
-        alignItems: 'center',
-    },
-    alertTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        marginBottom: 10,
-    },
-    alertMessage: {
-        fontSize: 14,
-        textAlign: 'center',
-        marginBottom: 20,
-        color: '#666',
-    },
-    alertButtonContainer: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        width: '100%',
-    },
-    alertButton: {
-        paddingVertical: 10,
-        borderRadius: 5,
-        width: '48%',
-        alignItems: 'center',
-    },
-    cancelButton: {
-        backgroundColor: '#D9D9D9',
-    },
-    cancelButtonText: {
-        color: '#000',
-        fontWeight: '600',
-    },
-    confirmButton: {
-        backgroundColor: '#FF6347', 
-    },
-    confirmButtonText: {
-        color: '#FFFFFF',
-        fontWeight: '600',
     },
 });
