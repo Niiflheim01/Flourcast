@@ -157,7 +157,8 @@ export default function CostCalculator({ onCalculated, onClose, currencySymbol =
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
+        keyboardVerticalOffset={0}
         style={{ flex: 1 }}>
         <View style={styles.header}>
           <View style={styles.headerLeft}>

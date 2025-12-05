@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, Dimensions, Platform, TouchableOpacity, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, Dimensions, Platform, TouchableOpacity, FlatList, SafeAreaView } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { SalesService } from '@/services/sales.service.sqlite';
 import { ProductService } from '@/services/product.service.sqlite';
 import { InventoryService } from '@/services/inventory.service.sqlite';
 import { TrendingUp, TrendingDown, AlertCircle, RefreshCw, FileText, ChevronDown, ChevronUp, Bell, X } from 'lucide-react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, router } from 'expo-router';
 import { CalendarModal } from '@/components/CalendarModal';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -230,9 +230,9 @@ export default function DashboardScreen() {
   const weekRange = `${weekStartStr} - ${weekEndStr}`;
 
   return (
-    <>
+    <SafeAreaView style={styles.container}>
       <ScrollView
-        style={styles.container}
+        style={styles.scrollView}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
         <View style={styles.content}>
           <View style={styles.header}>
@@ -284,12 +284,20 @@ export default function DashboardScreen() {
         )}
 
         {stats.lowStockCount > 0 && (
-          <View style={styles.alertBanner}>
+          <TouchableOpacity 
+            style={styles.alertBanner}
+            onPress={async () => {
+              // Store a flag to trigger the highlight effect
+              await AsyncStorage.setItem('triggerLowStockHighlight', 'true');
+              // Navigate to inventory tab
+              router.push('/(tabs)/inventory');
+            }}
+            activeOpacity={0.7}>
             <AlertCircle size={18} color="#DC6B19" />
             <Text style={styles.alertText}>
               {stats.lowStockCount} product{stats.lowStockCount > 1 ? 's' : ''} running low
             </Text>
-          </View>
+          </TouchableOpacity>
         )}
 
         {dailyReport && dailyReport.length > 0 && (
@@ -424,7 +432,7 @@ export default function DashboardScreen() {
           onNotesChange={loadUpcomingReminders}
         />
       )}
-    </>
+    </SafeAreaView>
   );
 }
 
@@ -432,6 +440,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#E8DCC8',
+  },
+  scrollView: {
+    flex: 1,
   },
   centerContainer: {
     flex: 1,

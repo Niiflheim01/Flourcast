@@ -216,10 +216,6 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false}>
-      <KeyboardAvoidingView 
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}>
         <View style={styles.container}>
           <View style={styles.header}>
             <Text style={styles.headerTitle}>Calendar</Text>
@@ -228,10 +224,15 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
             </TouchableOpacity>
           </View>
 
+      <KeyboardAvoidingView 
+        style={{ flex: 1 }}
+        behavior="padding"
+        keyboardVerticalOffset={0}>
           <ScrollView 
             style={styles.scrollView}
             keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}>
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 20 }}>
             <View style={styles.calendarHeader}>
           <TouchableOpacity onPress={previousMonth} style={styles.navButton}>
             <ChevronLeft size={24} color="#8B6F47" />
@@ -349,12 +350,12 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                             <ScrollView 
                               style={styles.wheelColumn}
                               showsVerticalScrollIndicator={false}
-                              snapToInterval={44}
+                              snapToInterval={36}
                               decelerationRate="fast"
-                              contentContainerStyle={{ paddingVertical: 88 }}
+                              contentContainerStyle={{ paddingVertical: 72 }}
                               onMomentumScrollEnd={(e) => {
                                 const y = e.nativeEvent.contentOffset.y;
-                                const index = Math.round(y / 44);
+                                const index = Math.round(y / 36);
                                 const hour = Math.max(1, Math.min(12, index + 1));
                                 setEditingHour(hour);
                               }}>
@@ -377,12 +378,12 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                             <ScrollView 
                               style={styles.wheelColumn}
                               showsVerticalScrollIndicator={false}
-                              snapToInterval={44}
+                              snapToInterval={36}
                               decelerationRate="fast"
-                              contentContainerStyle={{ paddingVertical: 88 }}
+                              contentContainerStyle={{ paddingVertical: 72 }}
                               onMomentumScrollEnd={(e) => {
                                 const y = e.nativeEvent.contentOffset.y;
-                                const index = Math.round(y / 44);
+                                const index = Math.round(y / 36);
                                 const minute = Math.max(0, Math.min(59, index));
                                 setEditingMinute(minute);
                               }}>
@@ -405,9 +406,9 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                             <ScrollView 
                               style={styles.wheelColumn}
                               showsVerticalScrollIndicator={false}
-                              snapToInterval={44}
+                              snapToInterval={36}
                               decelerationRate="fast"
-                              contentContainerStyle={{ paddingVertical: 88 }}>
+                              contentContainerStyle={{ paddingVertical: 72 }}>
                               {['AM', 'PM'].map((period) => (
                                 <TouchableOpacity
                                   key={period}
@@ -447,16 +448,18 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                         <Text style={styles.reminderSetText}>{note.reminderTime}</Text>
                       </View>
                     )}
-                    <TouchableOpacity
-                      onPress={() => {
-                        Alert.alert('Delete Note', 'Are you sure?', [
-                          { text: 'Cancel', style: 'cancel' },
-                          { text: 'Delete', onPress: () => deleteNote(note.id), style: 'destructive' },
-                        ]);
-                      }}
-                      style={styles.deleteButton}>
-                      <Trash2 size={16} color="#DC2626" />
-                    </TouchableOpacity>
+                    {editingReminderId !== note.id && (
+                      <TouchableOpacity
+                        onPress={() => {
+                          Alert.alert('Delete Note', 'Are you sure?', [
+                            { text: 'Cancel', style: 'cancel' },
+                            { text: 'Delete', onPress: () => deleteNote(note.id), style: 'destructive' },
+                          ]);
+                        }}
+                        style={styles.deleteButton}>
+                        <Trash2 size={16} color="#DC2626" />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               ))}
@@ -467,8 +470,8 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
           </View>
         )}
           </ScrollView>
-        </View>
       </KeyboardAvoidingView>
+        </View>
     </Modal>
   );
 }
@@ -746,9 +749,9 @@ const styles = StyleSheet.create({
   },
   timePickerContainer: {
     backgroundColor: '#1C1C1E',
-    padding: 16,
-    borderRadius: 16,
-    width: 320,
+    padding: 12,
+    borderRadius: 12,
+    width: 280,
     alignSelf: 'center',
   },
   timePickerMain: {
@@ -757,36 +760,36 @@ const styles = StyleSheet.create({
   },
   wheelPickerContainer: {
     flexDirection: 'row',
-    height: 220,
+    height: 180,
     backgroundColor: '#2A2A2A',
-    borderRadius: 12,
+    borderRadius: 10,
     overflow: 'hidden',
   },
   wheelColumn: {
     flex: 1,
-    height: 220,
+    height: 180,
   },
   wheelItem: {
-    height: 44,
+    height: 36,
     justifyContent: 'center',
     alignItems: 'center',
   },
   wheelText: {
-    fontSize: 22,
+    fontSize: 18,
     color: '#666666',
     fontWeight: '400',
   },
   wheelTextActive: {
     color: '#FFFFFF',
     fontWeight: '600',
-    fontSize: 24,
+    fontSize: 20,
   },
   selectionIndicator: {
     position: 'absolute',
-    top: 88,
+    top: 72,
     left: 0,
     right: 0,
-    height: 44,
+    height: 36,
     backgroundColor: 'rgba(139, 111, 71, 0.3)',
     borderTopWidth: 1,
     borderBottomWidth: 1,

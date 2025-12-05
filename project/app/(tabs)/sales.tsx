@@ -15,6 +15,7 @@ import {
   Animated,
   KeyboardAvoidingView,
   Platform,
+  SafeAreaView,
 } from 'react-native';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
@@ -353,10 +354,11 @@ export default function SalesScreen() {
   const canAddOrEdit = isViewingToday || Boolean(profile?.admin_mode);
 
   return (
-    <GestureHandlerRootView style={styles.container}>
-      <ScrollView
-        style={styles.scrollView}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+    <SafeAreaView style={styles.safeArea}>
+      <GestureHandlerRootView style={styles.container}>
+        <ScrollView
+          style={styles.scrollView}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <View>
@@ -499,7 +501,7 @@ export default function SalesScreen() {
                     <View style={styles.saleInfo}>
                       <Text style={styles.saleName}>{sale.product?.name}</Text>
                       <Text style={styles.saleDetails}>
-                        {sale.quantity} × {currencySymbol}{Number(sale.unit_price).toFixed(2)}
+                        {sale.quantity}{' × '}{currencySymbol}{Number(sale.unit_price).toFixed(2)}
                       </Text>
                       <Text style={styles.saleTime}>
                         {formatTime12Hour(sale.sale_time)}
@@ -657,7 +659,8 @@ export default function SalesScreen() {
         transparent
         onRequestClose={() => setAddSaleModalVisible(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : -20}
           style={{ flex: 1 }}>
         <View style={styles.modalOverlay}>
           <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
@@ -696,10 +699,10 @@ export default function SalesScreen() {
                                 {product.name}
                               </Text>
                               <Text style={styles.productOptionPrice}>
-                                {currencySymbol}{Number(product.price).toFixed(2)} per {product.unit}
+                                {currencySymbol}{Number(product.price).toFixed(2)}{' per '}{product.unit}
                               </Text>
                               <Text style={styles.productStockInfo}>
-                                Stock: {inventory.find(i => i.product_id === product.id)?.quantity || 0} {product.unit}
+                                {'Stock: '}{inventory.find(i => i.product_id === product.id)?.quantity || 0}{' '}{product.unit}
                               </Text>
                             </View>
                             {newSale.product_id === product.id && (
@@ -717,12 +720,12 @@ export default function SalesScreen() {
                     <View>
                       <Text style={styles.selectedProductLabel}>Selected:</Text>
                       <Text style={styles.selectedProductText}>
-                        {selectedProduct.name} - {currencySymbol}{Number(selectedProduct.price).toFixed(2)}
+                        {selectedProduct.name}{' - '}{currencySymbol}{Number(selectedProduct.price).toFixed(2)}
                       </Text>
                     </View>
                     <View style={styles.stockBadge}>
                       <Text style={styles.stockBadgeText}>
-                        {inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0} in stock
+                        {inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0}{' in stock'}
                       </Text>
                     </View>
                   </View>
@@ -765,7 +768,7 @@ export default function SalesScreen() {
                   </View>
                   {selectedProduct && (
                     <Text style={styles.quantityHelperText}>
-                      Max: {inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0} {selectedProduct.unit}
+                      {'Max: '}{inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0}{' '}{selectedProduct.unit}
                     </Text>
                   )}
                 </View>
@@ -860,7 +863,8 @@ export default function SalesScreen() {
         transparent
         onRequestClose={() => setEditSaleModalVisible(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : -20}
           style={{ flex: 1 }}>
           <View style={styles.modalOverlay}>
             <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
@@ -897,10 +901,10 @@ export default function SalesScreen() {
                               {product.name}
                             </Text>
                             <Text style={styles.productOptionPrice}>
-                              {currencySymbol}{Number(product.price).toFixed(2)} per {product.unit}
+                              {currencySymbol}{Number(product.price).toFixed(2)}{' per '}{product.unit}
                             </Text>
                             <Text style={styles.productStockInfo}>
-                              Stock: {inventory.find(i => i.product_id === product.id)?.quantity || 0} {product.unit}
+                              {'Stock: '}{inventory.find(i => i.product_id === product.id)?.quantity || 0}{' '}{product.unit}
                             </Text>
                           </View>
                           {editSale.product_id === product.id && (
@@ -917,12 +921,12 @@ export default function SalesScreen() {
                     <View>
                       <Text style={styles.selectedProductLabel}>Selected:</Text>
                       <Text style={styles.selectedProductText}>
-                        {editSelectedProduct.name} - {currencySymbol}{Number(editSelectedProduct.price).toFixed(2)}
+                        {editSelectedProduct.name}{' - '}{currencySymbol}{Number(editSelectedProduct.price).toFixed(2)}
                       </Text>
                     </View>
                     <View style={styles.stockBadge}>
                       <Text style={styles.stockBadgeText}>
-                        {inventory.find(i => i.product_id === editSelectedProduct.id)?.quantity || 0} in stock
+                        {inventory.find(i => i.product_id === editSelectedProduct.id)?.quantity || 0}{' in stock'}
                       </Text>
                     </View>
                   </View>
@@ -1016,11 +1020,16 @@ export default function SalesScreen() {
         </View>
         </KeyboardAvoidingView>
       </Modal>
-    </GestureHandlerRootView>
+      </GestureHandlerRootView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#E8DCC8',
+  },
   container: {
     flex: 1,
     backgroundColor: '#E8DCC8',

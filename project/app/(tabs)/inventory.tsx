@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,18 +14,22 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  SafeAreaView,
+  Animated,
 } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { ProductService } from '@/services/product.service.sqlite';
 import { InventoryService } from '@/services/inventory.service.sqlite';
 import { Product, InventoryWithProduct } from '@/types/database';
 import { Plus, Package, AlertTriangle, Edit, Minus, LayoutGrid, List, Image as ImageIcon, Calculator, ChefHat } from 'lucide-react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import ImagePickerButton from '@/components/ImagePickerButton';
 import CostCalculator from '@/components/CostCalculator';
 import RecipeManager from '@/components/RecipeManager';
 import { Image } from 'react-native';
 import { getCurrencySymbol } from '@/lib/currency';
 import { searchProductImages, downloadImage } from '@/lib/auto-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function InventoryScreen() {
   const { user, profile } = useAuth();
@@ -78,16 +82,18 @@ export default function InventoryScreen() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
   const [actionSheetItem, setActionSheetItem] = useState<InventoryWithProduct | null>(null);
+  const [highlightLowStock, setHighlightLowStock] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const scaleAnims = useRef<{[key: string]: Animated.Value}>({}).current;
 
   const commonUnits = [
-    'piece',
     'pcs',
     'dozen',
-    'loaf',
-    'pack',
+    'loaves',
+    'packs',
     'kg',
-    'gram',
-    'liter',
+    'grams',
+    'liters',
     'ml',
     'box',
     'tray',
@@ -97,6 +103,58 @@ export default function InventoryScreen() {
   useEffect(() => {
     loadInventory();
   }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      checkLowStockTrigger();
+    }, [])
+  );
+
+  const checkLowStockTrigger = async () => {
+    try {
+      const trigger = await AsyncStorage.getItem('triggerLowStockHighlight');
+      if (trigger === 'true') {
+        await AsyncStorage.removeItem('triggerLowStockHighlight');
+        // Wait a bit for the screen to render
+        setTimeout(() => {
+          setHighlightLowStock(true);
+          scrollViewRef.current?.scrollTo({ y: 200, animated: true });
+          
+          // Animate items
+          const lowStockIds = inventory
+            .filter(item => item.quantity <= item.min_threshold)
+            .map(item => item.id);
+          
+          lowStockIds.forEach((id, index) => {
+            if (!scaleAnims[id]) {
+              scaleAnims[id] = new Animated.Value(1);
+            }
+            
+            Animated.sequence([
+              Animated.delay(index * 50),
+              Animated.spring(scaleAnims[id], {
+                toValue: 1.05,
+                friction: 3,
+                tension: 40,
+                useNativeDriver: true,
+              }),
+              Animated.delay(800),
+              Animated.spring(scaleAnims[id], {
+                toValue: 1,
+                friction: 3,
+                tension: 40,
+                useNativeDriver: true,
+              })
+            ]).start();
+          });
+          
+          setTimeout(() => setHighlightLowStock(false), 1500);
+        }, 300);
+      }
+    } catch (error) {
+      console.error('Error checking low stock trigger:', error);
+    }
+  };
 
   const loadInventory = async () => {
     if (!user) return;
@@ -345,15 +403,60 @@ export default function InventoryScreen() {
   const filteredInventory = inventory.filter(item => {
     if (productTypeFilter === 'all') return true;
     return item.product.product_type === productTypeFilter;
+  }).sort((a, b) => {
+    // Sort low stock items first
+    const aIsLow = a.quantity <= a.min_threshold;
+    const bIsLow = b.quantity <= b.min_threshold;
+    if (aIsLow && !bIsLow) return -1;
+    if (!aIsLow && bIsLow) return 1;
+    return 0;
   });
 
   return (
-    <View style={styles.container}>
-      <ScrollView
-        style={styles.scrollView}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.scrollView}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
         {lowStockItems.length > 0 && (
-          <View style={styles.alertSection}>
+          <TouchableOpacity 
+            style={styles.alertSection}
+            onPress={() => {
+              setHighlightLowStock(true);
+              scrollViewRef.current?.scrollTo({ y: 200, animated: true });
+              
+              // Animate items
+              const lowStockIds = inventory
+                .filter(item => item.quantity <= item.min_threshold)
+                .map(item => item.id);
+              
+              lowStockIds.forEach((id, index) => {
+                if (!scaleAnims[id]) {
+                  scaleAnims[id] = new Animated.Value(1);
+                }
+                
+                Animated.sequence([
+                  Animated.delay(index * 50),
+                  Animated.spring(scaleAnims[id], {
+                    toValue: 1.05,
+                    friction: 3,
+                    tension: 40,
+                    useNativeDriver: true,
+                  }),
+                  Animated.delay(800),
+                  Animated.spring(scaleAnims[id], {
+                    toValue: 1,
+                    friction: 3,
+                    tension: 40,
+                    useNativeDriver: true,
+                  })
+                ]).start();
+              });
+              
+              setTimeout(() => setHighlightLowStock(false), 1500);
+            }}
+            activeOpacity={0.7}>
             <View style={styles.alertHeader}>
               <AlertTriangle size={20} color="#dc2626" />
               <Text style={styles.alertTitle}>Low Stock Alert</Text>
@@ -361,7 +464,7 @@ export default function InventoryScreen() {
             <Text style={styles.alertText}>
               {lowStockItems.length} item{lowStockItems.length > 1 ? 's' : ''} running low
             </Text>
-          </View>
+          </TouchableOpacity>
         )}
 
         <View style={styles.header}>
@@ -412,8 +515,28 @@ export default function InventoryScreen() {
           </View>
         ) : viewMode === 'grid' ? (
           <View style={styles.gridContainer}>
-            {filteredInventory.map((item) => (
-              <View key={item.id} style={styles.gridItem}>
+            {filteredInventory.map((item) => {
+              const isLowStock = item.quantity <= item.min_threshold;
+              return (
+              <Animated.View 
+                key={item.id} 
+                style={[
+                  styles.gridItem,
+                  isLowStock && {
+                    transform: [{ scale: scaleAnims[item.id] || 1 }],
+                  },
+                  highlightLowStock && isLowStock && {
+                    borderWidth: 2,
+                    borderColor: '#ef4444',
+                    shadowColor: '#ef4444',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 8,
+                    elevation: 8,
+                    backgroundColor: '#fff',
+                    zIndex: 10,
+                  }
+                ]}>
                 <TouchableOpacity
                   style={styles.gridItemTouchable}
                   onPress={() => {
@@ -452,14 +575,33 @@ export default function InventoryScreen() {
                   onPress={() => openEditProduct(item)}>
                   <Edit size={16} color="#fff" />
                 </TouchableOpacity>
-              </View>
-            ))}
+              </Animated.View>
+              );
+            })}
           </View>
         ) : (
           <View style={styles.productList}>
-            {filteredInventory.map((item) => (
-              <TouchableOpacity
+            {filteredInventory.map((item) => {
+              const isLowStock = item.quantity <= item.min_threshold;
+              return (
+              <Animated.View
                 key={item.id}
+                style={[
+                  isLowStock && {
+                    transform: [{ scale: scaleAnims[item.id] || 1 }],
+                  },
+                  highlightLowStock && isLowStock && {
+                    borderWidth: 2,
+                    borderColor: '#ef4444',
+                    shadowColor: '#ef4444',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 8,
+                    elevation: 8,
+                    zIndex: 10,
+                  }
+                ]}>
+              <TouchableOpacity
                 style={styles.productCard}
                 onPress={() => {
                   setActionSheetItem(item);
@@ -488,7 +630,9 @@ export default function InventoryScreen() {
                   <Edit size={16} color="#6b7280" style={styles.editIcon} />
                 </View>
               </TouchableOpacity>
-            ))}
+              </Animated.View>
+              );
+            })}
           </View>
         )}
       </ScrollView>
@@ -507,7 +651,8 @@ export default function InventoryScreen() {
         transparent
         onRequestClose={() => setAddProductModalVisible(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : -20}
           style={{ flex: 1 }}>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.modalOverlay}>
@@ -748,7 +893,8 @@ export default function InventoryScreen() {
         transparent
         onRequestClose={() => setEditProductModalVisible(false)}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior="padding"
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : -20}
           style={{ flex: 1 }}>
         <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
           <View style={styles.modalOverlay}>
@@ -1253,11 +1399,16 @@ export default function InventoryScreen() {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
-    </View>
+      </View>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#E8DCC8',
+  },
   container: {
     flex: 1,
     backgroundColor: '#E8DCC8',

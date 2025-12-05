@@ -7,7 +7,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
-  Alert
+  Alert,
+  SafeAreaView,
 } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
 import { ForecastService } from '@/services/forecast.service';
@@ -290,9 +291,10 @@ export default function ForecastScreen() {
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   return (
-    <ScrollView
-      style={styles.container}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView
+        style={styles.container}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
       <View style={styles.content}>
         <View style={styles.header}>
           <Text style={styles.title}>Production Forecast</Text>
@@ -488,11 +490,16 @@ export default function ForecastScreen() {
           </>
         )}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#E8DCC8',
+  },
   container: {
     flex: 1,
     backgroundColor: '#E8DCC8',
