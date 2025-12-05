@@ -77,6 +77,18 @@ export default function RegisterScreen() {
             <View style={styles.form}>
               <TextInput
                 style={styles.input}
+                placeholder="Bakery Name"
+                placeholderTextColor="#94a3b8"
+                value={bakeryName}
+                onChangeText={(text) => {
+                  setBakeryName(text);
+                  setError('');
+                }}
+                editable={!loading}
+              />
+
+              <TextInput
+                style={styles.input}
                 placeholder="Email"
                 placeholderTextColor="#94a3b8"
                 value={email}
@@ -91,23 +103,24 @@ export default function RegisterScreen() {
 
               <TextInput
                 style={styles.input}
-                placeholder="Username"
-                placeholderTextColor="#94a3b8"
-                value={bakeryName}
-                onChangeText={(text) => {
-                  setBakeryName(text);
-                  setError('');
-                }}
-                editable={!loading}
-              />
-
-              <TextInput
-                style={styles.input}
                 placeholder="Password"
                 placeholderTextColor="#94a3b8"
                 value={password}
                 onChangeText={(text) => {
                   setPassword(text);
+                  setError('');
+                }}
+                secureTextEntry
+                editable={!loading}
+              />
+
+              <TextInput
+                style={styles.input}
+                placeholder="Re-enter Password"
+                placeholderTextColor="#94a3b8"
+                value={confirmPassword}
+                onChangeText={(text) => {
+                  setConfirmPassword(text);
                   setError('');
                 }}
                 secureTextEntry
