@@ -746,7 +746,7 @@ const styles = StyleSheet.create({
   },
   timePickerContainer: {
     backgroundColor: '#1C1C1E',
-    padding: 20,
+    padding: 16,
     borderRadius: 16,
     width: 320,
     alignSelf: 'center',
