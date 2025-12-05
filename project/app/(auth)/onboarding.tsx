@@ -27,7 +27,7 @@ const onboardingData = [
     id: 1,
     title: 'Welcome to',
     titleHighlight: 'Flourcast',
-    description: 'Flourcats helps track your bakery\'s sales, manage inventory, and plan production all in one place.',
+    description: 'Flourcast helps track your bakery\'s sales, manage inventory, and plan production all in one place.',
     image: images[0],
   },
   {
