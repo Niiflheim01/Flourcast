@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,9 @@ import {
 import { Link, router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirebaseErrorMessage } from '@/lib/error-messages';
+import { Asset } from 'expo-asset';
+
+const logoImage = require('@/assets/images/logo.png');
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -21,6 +24,11 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { signIn } = useAuth();
+
+  useEffect(() => {
+    // Preload logo image
+    Asset.loadAsync(logoImage);
+  }, []);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -49,9 +57,10 @@ export default function LoginScreen() {
         <View style={styles.topSection}>
           <View style={styles.logoContainer}>
             <Image
-              source={require('@/assets/images/logo.png')}
+              source={logoImage}
               style={styles.logo}
               resizeMode="contain"
+              fadeDuration={0}
             />
           </View>
         </View>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,9 @@ import {
 } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useAuth } from '@/contexts/AuthContext';
+import { Asset } from 'expo-asset';
+
+const logoImage = require('@/assets/images/logo.png');
 
 export default function RegisterScreen() {
   const [bakeryName, setBakeryName] = useState('');
@@ -22,6 +25,11 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { signUp } = useAuth();
+
+  useEffect(() => {
+    // Preload logo image
+    Asset.loadAsync(logoImage);
+  }, []);
 
   const handleRegister = async () => {
     if (!bakeryName || !email || !password || !confirmPassword) {
@@ -60,9 +68,10 @@ export default function RegisterScreen() {
         <View style={styles.topSection}>
           <View style={styles.logoContainer}>
             <Image
-              source={require('@/assets/images/logo.png')}
+              source={logoImage}
               style={styles.logo}
               resizeMode="contain"
+              fadeDuration={0}
             />
           </View>
         </View>
