@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import {
   SafeAreaView,
   Switch,
   Easing,
+  InteractionManager,
 } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
@@ -26,6 +27,9 @@ import { SalesService } from '@/features/sales';
 import { ProductService, InventoryService } from '@/features/inventory';
 import { SaleWithProduct, Product, InventoryWithProduct, getCurrencySymbol } from '@/features/shared';
 import { Plus, ShoppingBag, Calendar, Trash2, Check, Minus, ChevronLeft, ChevronRight, Edit3, ChefHat } from 'lucide-react-native';
+
+// Cache for calendar dots - persists across renders
+const calendarCache = new Map<string, {[day: number]: number}>();
 
 function formatLongDate(date: Date): string {
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -107,6 +111,48 @@ export default function SalesScreen() {
   const [showCustomDateInput, setShowCustomDateInput] = useState(false);
   const [salesCountByDay, setSalesCountByDay] = useState<{[key: number]: number}>({});
   const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+
+  // Preload calendar dots for current and adjacent months
+  const preloadCalendarData = useCallback(async (year: number, month: number) => {
+    if (!user) return;
+    
+    const cacheKey = `${user.uid}-${year}-${month}`;
+    
+    // Return cached data if available
+    if (calendarCache.has(cacheKey)) {
+      return calendarCache.get(cacheKey);
+    }
+    
+    // Use optimized query for just counts
+    const countByDay = await SalesService.getSalesCountByDay(user.uid, year, month);
+    calendarCache.set(cacheKey, countByDay);
+    
+    return countByDay;
+  }, [user]);
+
+  // Preload adjacent months in background
+  const preloadAdjacentMonths = useCallback(async () => {
+    if (!user) return;
+    
+    // Calculate previous and next months
+    const prevMonth = selectedMonth === 0 ? 11 : selectedMonth - 1;
+    const prevYear = selectedMonth === 0 ? selectedYear - 1 : selectedYear;
+    const nextMonth = selectedMonth === 11 ? 0 : selectedMonth + 1;
+    const nextYear = selectedMonth === 11 ? selectedYear + 1 : selectedYear;
+    
+    // Preload in background without blocking UI
+    InteractionManager.runAfterInteractions(() => {
+      preloadCalendarData(prevYear, prevMonth);
+      
+      // Only preload next month if not in future
+      const today = new Date();
+      if (nextYear < today.getFullYear() || 
+          (nextYear === today.getFullYear() && nextMonth <= today.getMonth())) {
+        preloadCalendarData(nextYear, nextMonth);
+      }
+    });
+  }, [user, selectedMonth, selectedYear, preloadCalendarData]);
 
   const loadData = useCallback(async () => {
     if (!user) return;
@@ -125,7 +171,7 @@ export default function SalesScreen() {
           const dayStr = formatDateStr(selectedYear, selectedMonth, selectedDay);
           salesData = await SalesService.getSales(user.uid, dayStr, dayStr);
         } else {
-          // Show entire month
+          // Show entire month - use paginated query for better performance
           const lastDayOfMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
           const startStr = formatDateStr(selectedYear, selectedMonth, 1);
           const endStr = formatDateStr(selectedYear, selectedMonth, lastDayOfMonth);
@@ -146,34 +192,38 @@ export default function SalesScreen() {
       setProducts(productsData.filter(p => p.is_active && p.product_type === 'product'));
       setInventory(inventoryData);
 
-      // Calculate sales count by day for month view - always calculate for the entire month
+      // Load calendar dots using optimized cached query
       if (filterMode === 'month') {
-        // Fetch all sales for the entire month to show counts on calendar
-        const monthStart = new Date(selectedYear, selectedMonth, 1);
-        const monthEnd = new Date(selectedYear, selectedMonth + 1, 0);
-        // Format dates manually to avoid timezone issues
-        const startStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-01`;
-        const endStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
-        const allMonthSales = await SalesService.getSales(user.uid, startStr, endStr);
-
-        const countByDay: {[key: number]: number} = {};
-        allMonthSales.forEach(sale => {
-          // Parse date string directly to avoid timezone issues
-          // sale_date is in format "YYYY-MM-DD"
-          const dateParts = sale.sale_date.split('-');
-          if (dateParts.length === 3) {
-            const day = parseInt(dateParts[2], 10);
-            countByDay[day] = (countByDay[day] || 0) + 1;
-          }
-        });
-        setSalesCountByDay(countByDay);
+        setCalendarLoading(true);
+        const countByDay = await preloadCalendarData(selectedYear, selectedMonth);
+        setSalesCountByDay(countByDay || {});
+        setCalendarLoading(false);
+        
+        // Preload adjacent months in background
+        preloadAdjacentMonths();
       }
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {
       setLoading(false);
     }
-  }, [user, filterMode, selectedMonth, selectedYear, selectedDay]);
+  }, [user, filterMode, selectedMonth, selectedYear, selectedDay, preloadCalendarData, preloadAdjacentMonths]);
+
+  // Invalidate cache for a specific month when sales are modified
+  const invalidateCache = useCallback((date?: string) => {
+    if (!user) return;
+    
+    if (date) {
+      // Parse the date and invalidate that month's cache
+      const [year, month] = date.split('-').map(Number);
+      const cacheKey = `${user.uid}-${year}-${month - 1}`;
+      calendarCache.delete(cacheKey);
+    } else {
+      // Invalidate current month
+      const cacheKey = `${user.uid}-${selectedYear}-${selectedMonth}`;
+      calendarCache.delete(cacheKey);
+    }
+  }, [user, selectedYear, selectedMonth]);
 
   useFocusEffect(
     useCallback(() => {
@@ -346,6 +396,7 @@ export default function SalesScreen() {
       setCustomDate('');
       setCustomTime('');
       setShowCustomDateInput(false);
+      invalidateCache(saleData.sale_date);
       loadData();
       Alert.alert('Success', 'Sale recorded successfully');
     } catch (error: any) {
@@ -431,6 +482,10 @@ export default function SalesScreen() {
       setEditSaleModalVisible(false);
       setEditSale({ id: '', product_id: '', quantity: '', notes: '' });
       setEditSelectedProduct(null);
+      // Invalidate cache for the sale's month
+      if (selectedSale) {
+        invalidateCache(selectedSale.sale_date);
+      }
       setSelectedSale(null);
       loadData();
       Alert.alert('Success', 'Sale updated successfully');
@@ -469,6 +524,7 @@ export default function SalesScreen() {
             try {
               await SalesService.deleteSale(sale.id);
               setEditSaleModalVisible(false);
+              invalidateCache(sale.sale_date);
               loadData();
               Alert.alert('Success', 'Sale deleted successfully');
             } catch (error: any) {

@@ -359,4 +359,77 @@ export class SalesService {
     const results = await db.getAllAsync<any>(query, [userId, userId]);
     return results;
   }
+
+  /**
+   * Optimized method to get sales count by day for calendar dots
+   * Much faster than fetching full sales data with product joins
+   */
+  static async getSalesCountByDay(userId: string, year: number, month: number): Promise<{[day: number]: number}> {
+    const db = await getDatabase();
+    
+    // Create date range for the month
+    const monthStr = String(month + 1).padStart(2, '0');
+    const lastDay = new Date(year, month + 1, 0).getDate();
+    const startDate = `${year}-${monthStr}-01`;
+    const endDate = `${year}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+
+    // Very lightweight query - just counts, no joins
+    const query = `
+      SELECT 
+        CAST(substr(sale_date, 9, 2) AS INTEGER) as day,
+        COUNT(*) as count
+      FROM sales
+      WHERE user_id = ? AND sale_date >= ? AND sale_date <= ?
+      GROUP BY day
+    `;
+
+    const results = await db.getAllAsync<{day: number; count: number}>(query, [userId, startDate, endDate]);
+    
+    const countByDay: {[day: number]: number} = {};
+    results.forEach(row => {
+      countByDay[row.day] = row.count;
+    });
+    
+    return countByDay;
+  }
+
+  /**
+   * Get summary stats without fetching all records - optimized for dashboard
+   */
+  static async getSalesSummary(userId: string, startDate?: string, endDate?: string): Promise<{
+    totalRevenue: number;
+    totalItems: number;
+    totalTransactions: number;
+  }> {
+    const db = await getDatabase();
+
+    let query = `
+      SELECT 
+        COALESCE(SUM(total_amount), 0) as totalRevenue,
+        COALESCE(SUM(quantity), 0) as totalItems,
+        COUNT(*) as totalTransactions
+      FROM sales
+      WHERE user_id = ?
+    `;
+
+    const params: any[] = [userId];
+
+    if (startDate) {
+      query += ' AND sale_date >= ?';
+      params.push(startDate);
+    }
+
+    if (endDate) {
+      query += ' AND sale_date <= ?';
+      params.push(endDate);
+    }
+
+    const result = await db.getFirstAsync<any>(query, params);
+    
+    return {
+      totalRevenue: Number(result?.totalRevenue || 0),
+      totalItems: Number(result?.totalItems || 0),
+      totalTransactions: Number(result?.totalTransactions || 0)
+    };
+  }
 }

@@ -333,11 +333,18 @@ export default function DashboardScreen() {
     if (!user) return;
 
     try {
-      const [sales, products, inventory, allSales] = await Promise.all([
+      // Calculate date range for weekly data (only fetch what we need)
+      const weekEnd = new Date(selectedWeekStart);
+      weekEnd.setDate(selectedWeekStart.getDate() + 6);
+      const weekStartStr = formatDate(selectedWeekStart);
+      const weekEndStr = formatDate(weekEnd);
+      
+      const [sales, products, inventory, weekSales] = await Promise.all([
         SalesService.getTodaysSales(user.uid),
         ProductService.getProducts(user.uid),
         InventoryService.getInventory(user.uid),
-        SalesService.getSales(user.uid),
+        // Only fetch sales for the selected week instead of ALL sales
+        SalesService.getSales(user.uid, weekStartStr, weekEndStr),
       ]);
 
       const todayRevenue = sales.reduce((sum, sale) => sum + Number(sale.total_amount), 0);
@@ -371,7 +378,7 @@ export default function DashboardScreen() {
         date.setDate(selectedWeekStart.getDate() + i);
         const dateStr = formatDate(date);
         
-        const dayRevenue = allSales
+        const dayRevenue = weekSales
           .filter(sale => sale.sale_date && sale.sale_date.startsWith(dateStr))
           .reduce((sum, sale) => sum + Number(sale.total_amount), 0);
         

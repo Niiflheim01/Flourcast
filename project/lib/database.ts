@@ -163,6 +163,8 @@ const createTables = async (database: SQLite.SQLiteDatabase) => {
     CREATE INDEX IF NOT EXISTS idx_sales_user_id ON sales(user_id);
     CREATE INDEX IF NOT EXISTS idx_sales_product_id ON sales(product_id);
     CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(sale_date);
+    -- Compound index for fast user+date range queries (used by calendar, dashboard)
+    CREATE INDEX IF NOT EXISTS idx_sales_user_date ON sales(user_id, sale_date);
     CREATE INDEX IF NOT EXISTS idx_forecasts_user_id ON forecasts(user_id);
     CREATE INDEX IF NOT EXISTS idx_forecasts_product_id ON forecasts(product_id);
     CREATE INDEX IF NOT EXISTS idx_forecasts_date ON forecasts(forecast_date);
