@@ -876,9 +876,15 @@ export default function DashboardScreen() {
               const today = new Date();
               const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
               const isToday = data.date === todayStr;
+              // Calculate highlight height to encompass bar + value text + padding
+              const highlightHeight = displayHeight + (data.revenue > 0 ? 28 : 12); // bar + text space + padding
               return (
-                <View key={index} style={[styles.barContainer, isToday && styles.barContainerToday]}>
+                <View key={index} style={styles.barContainer}>
                   <View style={styles.barWrapper}>
+                    {/* Today's highlight background - responsive to bar height */}
+                    {isToday && (
+                      <View style={[styles.todayHighlight, { height: highlightHeight }]} />
+                    )}
                     <View style={[styles.bar, { height: displayHeight }, isToday && styles.barToday]} />
                     {data.revenue > 0 && (
                       <Text style={[styles.barValue, isToday && styles.barValueToday]} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{data.revenue.toLocaleString('en-PH', { maximumFractionDigits: 0 })}</Text>
@@ -1142,23 +1148,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
   },
-  barContainerToday: {
-    backgroundColor: '#E8F5E9',
-    borderRadius: 10,
-    marginHorizontal: 1,
-    paddingTop: 12,
-  },
   barWrapper: {
     width: '65%',
     alignItems: 'center',
     justifyContent: 'flex-end',
     height: 110,
+    position: 'relative',
+  },
+  todayHighlight: {
+    position: 'absolute',
+    bottom: 0,
+    left: -8,
+    right: -8,
+    backgroundColor: '#E8F5E9',
+    borderRadius: 10,
   },
   bar: {
     width: '100%',
     backgroundColor: '#10B981',
     borderRadius: 8,
     minHeight: 4,
+    zIndex: 1,
   },
   barToday: {
     backgroundColor: '#059669',
@@ -1175,6 +1185,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
     width: '100%',
+    zIndex: 1,
   },
   barValueToday: {
     color: '#059669',
