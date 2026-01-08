@@ -11,18 +11,34 @@ export class ProfileService {
     const db = await getDatabase();
 
     const query = `
-      INSERT INTO profiles (id, bakery_name, email, currency, timezone, avatar_url)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO profiles (
+        id, bakery_name, email, currency, timezone, avatar_url,
+        admin_mode, role, current_role, admin_setup_completed
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
-    await db.runAsync(query, [
-      profile.id,
-      profile.bakery_name,
-      profile.email,
-      profile.currency || 'PHP',
-      profile.timezone || 'Asia/Manila',
-      profile.avatar_url || null
-    ]);
+    try {
+      await db.runAsync(query, [
+        profile.id,
+        profile.bakery_name,
+        profile.email,
+        profile.currency || 'PHP',
+        profile.timezone || 'Asia/Manila',
+        profile.avatar_url || null,
+        0,        // admin_mode
+        'admin',  // role
+        'admin',  // current_role
+        0         // admin_setup_completed
+      ]);
+    } catch (error: any) {
+      // If profile already exists, that's OK - just return existing profile
+      if (error?.message?.includes('UNIQUE constraint failed')) {
+        console.log('Profile already exists, returning existing profile');
+        return this.getProfile(profile.id);
+      }
+      throw error;
+    }
 
     return this.getProfile(profile.id);
   }

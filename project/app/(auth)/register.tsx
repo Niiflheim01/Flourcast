@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Link, router } from 'expo-router';
 import { useAuth } from '@/features/auth';
+import { getFirebaseErrorMessage } from '@/lib/error-messages';
 import { Asset } from 'expo-asset';
 
 const logoImage = require('@/assets/images/logo.png');
@@ -54,7 +55,7 @@ export default function RegisterScreen() {
       await signUp(email, password, bakeryName);
       router.replace('/(tabs)');
     } catch (err: any) {
-      setError(err.message || 'Failed to create account');
+      setError(getFirebaseErrorMessage(err));
     } finally {
       setLoading(false);
     }
