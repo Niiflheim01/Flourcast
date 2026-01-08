@@ -13,6 +13,18 @@ import { NotificationService } from '@/lib/notifications';
 
 const { width } = Dimensions.get('window');
 
+// Helper function for number formatting with commas
+function formatNumber(num: number, decimals: number = 2): string {
+  return num.toLocaleString('en-US', { 
+    minimumFractionDigits: decimals, 
+    maximumFractionDigits: decimals 
+  });
+}
+
+function formatWholeNumber(num: number): string {
+  return num.toLocaleString('en-US');
+}
+
 // Swipeable Alert Component
 const SwipeableAlert = ({ 
   type, 
@@ -475,7 +487,7 @@ export default function DashboardScreen() {
       points.push({ text: 'All inventory levels are healthy' });
     }
     
-    points.push({ text: `Total revenue: ${currencySymbol}${stats.todayRevenue.toLocaleString('en-PH', { minimumFractionDigits: 2 })}` });
+    points.push({ text: `Total revenue: ${currencySymbol}${formatNumber(stats.todayRevenue)}` });
     
     return points;
   };
@@ -856,11 +868,11 @@ export default function DashboardScreen() {
 
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{stats.todayRevenue.toLocaleString('en-PH', { minimumFractionDigits: 2 })}</Text>
+            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{formatNumber(stats.todayRevenue)}</Text>
             <Text style={styles.statLabel} numberOfLines={1}>Total Sales</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{stats.todayItems} pc/s</Text>
+            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{formatWholeNumber(stats.todayItems)} pc/s</Text>
             <Text style={styles.statLabel} numberOfLines={2}>Products Sold Today</Text>
           </View>
         </View>
@@ -894,7 +906,7 @@ export default function DashboardScreen() {
                     )}
                     <View style={[styles.bar, { height: displayHeight }, isToday && styles.barToday]} />
                     {data.revenue > 0 && (
-                      <Text style={[styles.barValue, isToday && styles.barValueToday]} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{data.revenue.toLocaleString('en-PH', { maximumFractionDigits: 0 })}</Text>
+                      <Text style={[styles.barValue, isToday && styles.barValueToday]} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{formatWholeNumber(Math.round(data.revenue))}</Text>
                     )}
                   </View>
                   <Text style={[styles.barLabel, isToday && styles.barLabelToday]}>{data.day.slice(0, 3)}</Text>
@@ -914,13 +926,30 @@ export default function DashboardScreen() {
             nestedScrollEnabled={true}
             showsVerticalScrollIndicator={true}>
             {inventory.length > 0 ? (
-              inventory.map((item: any, index: number) => {
+              // Sort inventory: Low stock (red) first, then Medium (yellow), then Good (green)
+              [...inventory].sort((a: any, b: any) => {
+                const getStockPriority = (item: any) => {
+                  const stockLevel = item.quantity || 0;
+                  const minThreshold = item.min_threshold || 10;
+                  if (stockLevel <= minThreshold) return 0; // Low - highest priority
+                  if (stockLevel <= minThreshold * 2.5) return 1; // Medium
+                  return 2; // Good - lowest priority
+                };
+                return getStockPriority(a) - getStockPriority(b);
+              }).map((item: any, index: number) => {
                 const stockLevel = item.quantity || 0;
-                const maxStock = (item as any).max_threshold ?? 100;
-                const stockPercentage = maxStock > 0 ? Math.min(100, Math.round((stockLevel / maxStock) * 100)) : 0;
-                const isLowStock = stockLevel <= item.min_threshold;
-                const isOverstock = stockLevel > maxStock;
-                const isMediumStock = !isLowStock && !isOverstock && stockPercentage < 70;
+                const minThreshold = item.min_threshold || 10;
+                // Calculate stock status based on relationship to min_threshold
+                // Low: at or below min_threshold (red)
+                // Medium: between min_threshold and 2x min_threshold (yellow)
+                // Good: above 2x min_threshold (green)
+                const isLowStock = stockLevel <= minThreshold;
+                const isMediumStock = !isLowStock && stockLevel <= minThreshold * 2.5;
+                const isGoodStock = !isLowStock && !isMediumStock;
+                
+                // Calculate percentage for progress bar (based on a reasonable max of 3x threshold)
+                const reasonableMax = minThreshold * 4;
+                const stockPercentage = Math.min(100, Math.round((stockLevel / reasonableMax) * 100));
                 
                 return (
                 <View key={index} style={styles.inventoryItem}>
@@ -931,18 +960,17 @@ export default function DashboardScreen() {
                     <View style={[
                       styles.stockBadge,
                       isLowStock && styles.stockBadgeLow,
-                      isOverstock && styles.stockBadgeOverstock,
                       isMediumStock && styles.stockBadgeMedium,
-                      !isLowStock && !isOverstock && !isMediumStock && styles.stockBadgeHigh
+                      isGoodStock && styles.stockBadgeHigh
                     ]}>
                       <Text style={styles.stockBadgeText}>
-                        {isLowStock ? 'Low Stock' : isOverstock ? 'Overstock' : isMediumStock ? 'Medium' : 'In Stock'}
+                        {isLowStock ? 'Low Stock' : isMediumStock ? 'Medium' : 'Good'}
                       </Text>
                     </View>
                   </View>
                   <View style={styles.inventoryItemDetails}>
-                    <Text style={styles.inventoryDetailText} numberOfLines={1} adjustsFontSizeToFit>Available: {stockLevel} pcs</Text>
-                    <Text style={styles.inventoryDetailText} numberOfLines={1} adjustsFontSizeToFit>Stock Level: {stockPercentage}%</Text>
+                    <Text style={styles.inventoryDetailText} numberOfLines={1} adjustsFontSizeToFit>Available: {stockLevel} {item.product?.unit || 'pcs'}</Text>
+                    <Text style={styles.inventoryDetailText} numberOfLines={1} adjustsFontSizeToFit>Min: {minThreshold} {item.product?.unit || 'pcs'}</Text>
                   </View>
                   <View style={styles.stockProgressBar}>
                     <View style={[
@@ -950,7 +978,7 @@ export default function DashboardScreen() {
                       { width: `${stockPercentage}%` },
                       isLowStock && styles.progressLow,
                       isMediumStock && styles.progressMedium,
-                      !isLowStock && !isMediumStock && styles.progressHigh
+                      isGoodStock && styles.progressHigh
                     ]} />
                   </View>
                 </View>

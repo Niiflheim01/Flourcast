@@ -30,8 +30,21 @@ import CostCalculator from '@/components/CostCalculator';
 import RecipeManager from '@/components/RecipeManager';
 import { Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getProductImageSource } from '@/lib/demo-images';
 
 const { width } = Dimensions.get('window');
+
+// Helper function for number formatting with commas
+function formatNumber(num: number, decimals: number = 2): string {
+  return num.toLocaleString('en-US', { 
+    minimumFractionDigits: decimals, 
+    maximumFractionDigits: decimals 
+  });
+}
+
+function formatWholeNumber(num: number): string {
+  return num.toLocaleString('en-US');
+}
 
 // Swipeable Alert Component
 const SwipeableAlert = ({ 
@@ -848,9 +861,9 @@ export default function InventoryScreen() {
                     }
                   }}>
                   <View style={styles.gridImageContainer}>
-                    {item.product?.image_url ? (
+                    {getProductImageSource(item.product?.image_url, item.product?.name) ? (
                       <Image
-                        source={{ uri: item.product.image_url }}
+                        source={getProductImageSource(item.product?.image_url, item.product?.name)}
                         style={styles.gridImage}
                       />
                     ) : (
@@ -894,7 +907,7 @@ export default function InventoryScreen() {
                     <Text style={styles.gridStock}>
                       {item.quantity} {item.product?.unit}
                     </Text>
-                    <Text style={styles.gridPrice}>{currencySymbol}{Number(item.product?.price).toFixed(2)}</Text>
+                    <Text style={styles.gridPrice}>{currencySymbol}{formatNumber(Number(item.product?.price))}</Text>
                   </View>
                 </TouchableOpacity>
               </Animated.View>
@@ -945,16 +958,16 @@ export default function InventoryScreen() {
                     setActionSheetVisible(true);
                   }
                 }}>
-                {item.product?.image_url && (
+                {getProductImageSource(item.product?.image_url, item.product?.name) && (
                   <Image
-                    source={{ uri: item.product.image_url }}
+                    source={getProductImageSource(item.product?.image_url, item.product?.name)}
                     style={styles.productImage}
                   />
                 )}
                 <View style={styles.productInfo}>
                   <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">{item.product?.name}</Text>
                   <Text style={styles.productUnit}>{item.product?.unit}</Text>
-                  <Text style={styles.productPrice}>{currencySymbol}{Number(item.product?.price).toFixed(2)}</Text>
+                  <Text style={styles.productPrice}>{currencySymbol}{formatNumber(Number(item.product?.price))}</Text>
                 </View>
                 <View style={styles.stockInfo}>
                   {/* No alert icon for low stock or overstock in list view */}

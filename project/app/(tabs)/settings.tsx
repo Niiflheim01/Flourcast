@@ -1,13 +1,15 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput, Modal, Switch, SafeAreaView, Image, Linking } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput, Modal, Switch, SafeAreaView, Image, Linking, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/features/auth';
 import { ProfileService } from '@/features/auth';
 import { getCurrencySymbol } from '@/features/shared';
 import { AdminRoleManager, CURRENCIES } from '@/features/settings';
-import { User, LogOut, Store, Edit, Settings, ChevronRight, Bell, ChevronDown } from 'lucide-react-native';
+import { User, LogOut, Store, Edit, Settings, ChevronRight, Bell, ChevronDown, RotateCcw } from 'lucide-react-native';
 import { useState, useEffect } from 'react';
 import ImagePickerButton from '@/components/ImagePickerButton';
 import { NotificationService } from '@/lib/notifications';
+import { DEMO_PROFILE_IMAGE } from '@/lib/demo-images';
+import { DEMO_MODE, resetDemoToBaseState } from '@/lib/demo-data';
 
 export default function ProfileScreen() {
   const { profile, signOut, refreshProfile } = useAuth();
@@ -18,6 +20,41 @@ export default function ProfileScreen() {
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [adminMode, setAdminMode] = useState(profile?.admin_mode || false);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+
+  // Handle demo reset - clears all data and returns to onboarding
+  const handleResetDemo = () => {
+    Alert.alert(
+      '🔄 Restart Demo Version',
+      'This will reset ALL demo data to the original base state:\n\n' +
+      '• All added products will be removed\n' +
+      '• All recorded sales will be cleared\n' +
+      '• Inventory will return to initial values\n' +
+      '• All alerts will be restored\n' +
+      '• You will be returned to onboarding\n\n' +
+      'This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset Demo',
+          style: 'destructive',
+          onPress: async () => {
+            setIsResetting(true);
+            try {
+              await resetDemoToBaseState();
+              // Navigate to onboarding
+              router.replace('/(auth)/onboarding');
+            } catch (error) {
+              console.error('Reset error:', error);
+              Alert.alert('Error', 'Failed to reset demo. Please try again.');
+            } finally {
+              setIsResetting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
 
   // Load notification preference on mount
   useEffect(() => {
@@ -123,7 +160,15 @@ export default function ProfileScreen() {
         <View style={styles.content}>
         {/* Profile Header */}
         <View style={styles.profileHeader}>
-          {profile?.current_role === 'admin' ? (
+          {DEMO_MODE ? (
+            // Demo mode: show bundled profile image
+            <View style={{ width: 100, height: 100, borderRadius: 50, overflow: 'hidden', backgroundColor: '#e5e7eb' }}>
+              <Image 
+                source={DEMO_PROFILE_IMAGE} 
+                style={{ width: 100, height: 100 }} 
+              />
+            </View>
+          ) : profile?.current_role === 'admin' ? (
             <ImagePickerButton
               currentImageUri={avatarUrl}
               onImageSelected={async (uri) => {
@@ -220,6 +265,24 @@ export default function ProfileScreen() {
         {/* Account Actions */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
+          
+          {/* Demo Reset Button - Only show in DEMO_MODE */}
+          {DEMO_MODE && (
+            <TouchableOpacity 
+              style={[styles.resetDemoButton, isResetting && styles.resetDemoButtonDisabled]} 
+              onPress={handleResetDemo}
+              disabled={isResetting}>
+              {isResetting ? (
+                <ActivityIndicator size="small" color="#f97316" />
+              ) : (
+                <RotateCcw size={20} color="#f97316" />
+              )}
+              <Text style={styles.resetDemoButtonText}>
+                {isResetting ? 'Resetting...' : 'Restart Demo Version'}
+              </Text>
+            </TouchableOpacity>
+          )}
+          
           <TouchableOpacity style={styles.dangerButton} onPress={handleSignOut}>
             <LogOut size={20} color="#dc2626" />
             <Text style={styles.dangerButtonText}>Sign Out</Text>
@@ -509,6 +572,25 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#E5E7EB',
     marginVertical: 16,
+  },
+  resetDemoButton: {
+    backgroundColor: '#FFF7ED',
+    borderRadius: 12,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#FDBA74',
+    marginBottom: 12,
+  },
+  resetDemoButtonDisabled: {
+    opacity: 0.6,
+  },
+  resetDemoButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#f97316',
   },
   dangerButton: {
     backgroundColor: '#FEE2E2',

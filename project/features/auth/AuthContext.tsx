@@ -7,12 +7,13 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthService } from './auth.service';
 import { ProfileService } from './profile.service';
 import { GoogleAuthService, configureGoogleSignIn } from './google-auth.service';
 import { Profile } from '@/features/shared/types';
 import { initDatabase } from '@/features/shared/database';
-import { DEMO_MODE, DEMO_USER_ID, DEMO_EMAIL, DEMO_BAKERY_NAME, setupDemoData, isDemoDataReady } from '@/lib/demo-data';
+import { DEMO_MODE, DEMO_USER_ID, DEMO_EMAIL, DEMO_BAKERY_NAME, setupDemoData, isDemoDataReady, updateDemoProductImages } from '@/lib/demo-data';
 
 interface AuthContextType {
   user: User | null;
@@ -88,11 +89,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const initDemoMode = async () => {
     try {
       console.log('Initializing demo mode...');
+      // Clear dismissed alerts on app cold start so alerts show fresh each session
+      await AsyncStorage.removeItem('dismissedAlerts');
+      
+      // Only setup demo data if it doesn't exist yet (persists in SQLite)
       const ready = await isDemoDataReady();
       if (!ready) {
         console.log('Setting up demo data...');
         await setupDemoData();
+      } else {
+        console.log('Demo data already exists, using cached data');
+        // Update product images for existing demo data (in case images were added later)
+        await updateDemoProductImages();
       }
+      
       setLoading(false);
     } catch (error) {
       console.error('Error initializing demo mode:', error);

@@ -33,6 +33,18 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 
 const { width } = Dimensions.get('window');
 
+// Helper function for number formatting with commas
+function formatNumber(num: number, decimals: number = 2): string {
+  return num.toLocaleString('en-US', { 
+    minimumFractionDigits: decimals, 
+    maximumFractionDigits: decimals 
+  });
+}
+
+function formatWholeNumber(num: number): string {
+  return num.toLocaleString('en-US');
+}
+
 function formatDate(date: Date): string {
   const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -46,7 +58,7 @@ interface BakingPlan {
   expectedSales: number;
   currentStock: number;
   needToBake: number;
-  priority: 'urgent' | 'needed' | 'optional' | 'skip';
+  priority: 'urgent' | 'bake' | 'enough';
   reliability: number;
 }
 
@@ -163,18 +175,16 @@ export default function ForecastScreen() {
         const needToBake = Math.max(0, expectedSales - currentStock);
         const reliability = forecast ? Math.round(forecast.confidence_score * 100) : 0;
 
-        let priority: 'urgent' | 'needed' | 'optional' | 'skip' = 'skip';
+        let priority: 'urgent' | 'bake' | 'enough' = 'enough';
         
         if (!forecast) {
-          // No forecast data - show as "no data" with skip priority
-          priority = 'skip';
+          // No forecast data - default to enough (will show NO DATA badge)
+          priority = 'enough';
         } else if (needToBake > 0) {
-          if (currentStock < expectedSales * 0.2) {
+          if (currentStock < expectedSales * 0.3) {
             priority = 'urgent';
-          } else if (currentStock < expectedSales * 0.7) {
-            priority = 'needed';
           } else {
-            priority = 'optional';
+            priority = 'bake';
           }
         }
 
@@ -190,7 +200,7 @@ export default function ForecastScreen() {
         });
       }
 
-      const priorityOrder = { urgent: 0, needed: 1, optional: 2, skip: 3 };
+      const priorityOrder = { urgent: 0, bake: 1, enough: 2 };
       plans.sort((a, b) => {
         if (a.priority !== b.priority) {
           return priorityOrder[a.priority] - priorityOrder[b.priority];
@@ -398,10 +408,9 @@ export default function ForecastScreen() {
 
   const getPriorityColor = (priority: string) => {
     switch (priority) {
-      case 'urgent': return '#DC2626';
-      case 'needed': return '#F59E0B';
-      case 'optional': return '#FBBF24'; // Light yellow for optional
-      case 'skip': return '#10B981';
+      case 'urgent': return '#DC2626'; // Red
+      case 'bake': return '#FBBF24'; // Yellow
+      case 'enough': return '#10B981'; // Green
       default: return '#6B7280';
     }
   };
@@ -409,9 +418,8 @@ export default function ForecastScreen() {
   const getPriorityLabel = (priority: string) => {
     switch (priority) {
       case 'urgent': return 'URGENT';
-      case 'needed': return 'BAKE';
-      case 'optional': return 'OPTIONAL';
-      case 'skip': return 'ENOUGH';
+      case 'bake': return 'BAKE';
+      case 'enough': return 'ENOUGH';
       default: return '';
     }
   };
@@ -455,7 +463,7 @@ export default function ForecastScreen() {
   tomorrow.setDate(tomorrow.getDate() + 1);
 
   const urgentCount = bakingPlans.filter(p => p.priority === 'urgent').length;
-  const neededCount = bakingPlans.filter(p => p.priority === 'needed').length;
+  const bakeCount = bakingPlans.filter(p => p.priority === 'bake').length;
 
   // Calculate max for the chart
   const maxQuantity = topProducts.length > 0 ? Math.max(...topProducts.map(p => p.total_quantity)) : 1;
@@ -609,7 +617,7 @@ export default function ForecastScreen() {
                   )}
 
                   {/* Quick Summary */}
-                  {(urgentCount > 0 || neededCount > 0) && (
+                  {(urgentCount > 0 || bakeCount > 0) && (
                     <View style={styles.summaryRow}>
                       {urgentCount > 0 && (
                         <View style={styles.summaryBadgeUrgent}>
@@ -617,10 +625,10 @@ export default function ForecastScreen() {
                           <Text style={styles.summaryBadgeText}>{urgentCount} Urgent</Text>
                         </View>
                       )}
-                      {neededCount > 0 && (
-                        <View style={styles.summaryBadgeNeeded}>
-                          <ChefHat size={16} color="#F59E0B" />
-                          <Text style={styles.summaryBadgeTextNeeded}>{neededCount} To Bake</Text>
+                      {bakeCount > 0 && (
+                        <View style={styles.summaryBadgeBake}>
+                          <ChefHat size={16} color="#92400E" />
+                          <Text style={styles.summaryBadgeTextBake}>{bakeCount} To Bake</Text>
                         </View>
                       )}
                     </View>
@@ -635,7 +643,8 @@ export default function ForecastScreen() {
                         style={[
                           styles.bakingItem,
                           plan.priority === 'urgent' && styles.bakingItemUrgent,
-                          plan.priority === 'needed' && styles.bakingItemNeeded,
+                          plan.priority === 'bake' && styles.bakingItemBake,
+                          plan.priority === 'enough' && styles.bakingItemEnough,
                         ]}>
                         <View style={styles.bakingItemHeader}>
                           <Text style={styles.bakingItemName} numberOfLines={1}>
@@ -661,8 +670,9 @@ export default function ForecastScreen() {
                               </View>
                               <View style={[
                                 styles.bakingMetricHighlight,
-                                plan.needToBake === 0 ? styles.bakingMetricReady : 
-                                  plan.priority === 'optional' ? styles.bakingMetricOptional : styles.bakingMetricNeedsBake
+                                plan.priority === 'enough' && styles.bakingMetricEnough,
+                                plan.priority === 'bake' && styles.bakingMetricBake,
+                                plan.priority === 'urgent' && styles.bakingMetricUrgent,
                               ]}>
                                 <Text style={styles.bakingMetricLabelHighlight}>
                                   {plan.needToBake > 0 ? 'Bake' : 'Ready'}
@@ -733,13 +743,13 @@ export default function ForecastScreen() {
               <View style={styles.analysisStatsContainer}>
                 <View style={styles.analysisStatCard}>
                   <Text style={styles.analysisStatValue} numberOfLines={1} adjustsFontSizeToFit>
-                    {currencySymbol}{salesStats.totalRevenue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {currencySymbol}{formatNumber(salesStats.totalRevenue)}
                   </Text>
                   <Text style={styles.analysisStatLabel}>Total Revenue</Text>
                 </View>
                 <View style={styles.analysisStatCard}>
                   <Text style={styles.analysisStatValue} numberOfLines={1} adjustsFontSizeToFit>
-                    {salesStats.totalItems.toLocaleString()}
+                    {formatWholeNumber(salesStats.totalItems)}
                   </Text>
                   <Text style={styles.analysisStatLabel}>Items Sold</Text>
                 </View>
@@ -908,9 +918,14 @@ export default function ForecastScreen() {
                             <View style={styles.insightExpandedItem}>
                               <Text style={styles.insightExpandedLabel}>Sales Consistency</Text>
                               <View style={styles.consistencyBar}>
-                                <View style={[styles.consistencyFill, { width: `${(insight.consistency || 0) * 100}%` }]} />
+                                <View style={[styles.consistencyFill, { 
+                                  width: `${(insight.consistency || 0) * 100}%`,
+                                  backgroundColor: (insight.consistency || 0) >= 0.7 ? '#10B981' : (insight.consistency || 0) >= 0.4 ? '#FBBF24' : '#DC2626'
+                                }]} />
                               </View>
-                              <Text style={styles.consistencyText}>{Math.round((insight.consistency || 0) * 100)}%</Text>
+                              <Text style={[styles.consistencyText, {
+                                color: (insight.consistency || 0) >= 0.7 ? '#10B981' : (insight.consistency || 0) >= 0.4 ? '#D97706' : '#DC2626'
+                              }]}>{Math.round((insight.consistency || 0) * 100)}%</Text>
                             </View>
                           </View>
                         </View>
@@ -1284,11 +1299,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 8,
   },
-  summaryBadgeNeeded: {
+  summaryBadgeBake: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#FEF3C7',
+    backgroundColor: '#FEF3C7', // Light yellow background
     paddingVertical: 8,
     paddingHorizontal: 12,
     borderRadius: 8,
@@ -1298,8 +1313,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  summaryBadgeTextNeeded: {
-    color: '#F59E0B',
+  summaryBadgeTextBake: {
+    color: '#92400E', // Darker yellow/amber for text
     fontSize: 13,
     fontWeight: '600',
   },
@@ -1312,8 +1327,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 14,
-    borderWidth: 2,
-    borderColor: '#D4BFA8',
     shadowColor: '#5D3A1A',
     shadowOffset: { width: 0, height: 5 },
     shadowOpacity: 0.20,
@@ -1321,12 +1334,13 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   bakingItemUrgent: {
-    borderColor: '#DC2626',
-    borderWidth: 3,
+    // No border highlight
   },
-  bakingItemNeeded: {
-    borderColor: '#F59E0B',
-    borderWidth: 3,
+  bakingItemBake: {
+    // No border highlight
+  },
+  bakingItemEnough: {
+    // No border highlight
   },
   bakingItemHeader: {
     flexDirection: 'row',
@@ -1380,17 +1394,14 @@ const styles = StyleSheet.create({
     padding: 10,
     alignItems: 'center',
   },
-  bakingMetricReady: {
-    backgroundColor: '#10B981',
+  bakingMetricEnough: {
+    backgroundColor: '#10B981', // Green - matches ENOUGH badge
   },
-  bakingMetricNeedsBake: {
-    backgroundColor: '#F59E0B',
+  bakingMetricBake: {
+    backgroundColor: '#FBBF24', // Yellow - matches BAKE badge
   },
-  bakingMetricOptional: {
-    backgroundColor: '#FBBF24', // Light yellow for optional
-  },
-  bakingMetricNoData: {
-    backgroundColor: '#DC2626',
+  bakingMetricUrgent: {
+    backgroundColor: '#DC2626', // Red - matches URGENT badge
   },
   bakingMetricLabelHighlight: {
     fontSize: 11,

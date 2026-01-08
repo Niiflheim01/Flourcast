@@ -144,7 +144,7 @@ export class ForecastService {
     const { SalesService } = await import('@/features/sales/sales.service');
 
     const products = await db.getAllAsync<any>(
-      'SELECT id, name FROM products WHERE user_id = ? AND is_active = 1',
+      "SELECT id, name FROM products WHERE user_id = ? AND is_active = 1 AND product_type = 'product'",
       [userId]
     );
 
@@ -161,11 +161,42 @@ export class ForecastService {
       return this.getForecastsForDate(userId, tomorrowStr);
     }
 
+    // Batch fetch all sales data for the last 30 days (much faster than per-product queries)
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - 30);
+    
+    const allSalesData = await db.getAllAsync<any>(`
+      SELECT 
+        product_id,
+        sale_date,
+        SUM(quantity) as total_quantity
+      FROM sales
+      WHERE user_id = ? AND sale_date >= ? AND sale_date <= ?
+      GROUP BY product_id, sale_date
+      ORDER BY product_id, sale_date ASC
+    `, [userId, formatDate(startDate), formatDate(endDate)]);
+
+    // Group sales by product_id for fast lookup
+    const salesByProduct = new Map<string, any[]>();
+    for (const sale of allSalesData) {
+      if (!salesByProduct.has(sale.product_id)) {
+        salesByProduct.set(sale.product_id, []);
+      }
+      salesByProduct.get(sale.product_id)!.push(sale);
+    }
+
     const forecasts: any[] = [];
 
     for (const product of products) {
       try {
-        const prediction = await this.predictDemand(userId, product.id, SalesService);
+        const salesData = salesByProduct.get(product.id) || [];
+        
+        if (salesData.length < 7) {
+          continue; // Skip products without enough data
+        }
+
+        const prediction = this.bakerySmartPrediction(salesData);
 
         if (prediction) {
           const forecast = await this.createForecast({
@@ -193,6 +224,7 @@ export class ForecastService {
   ): Promise<{ quantity: number; confidence: number } | null> {
     const endDate = new Date();
     const startDate = new Date();
+    // Only use last 30 days for prediction (faster, still accurate for bakery)
     startDate.setDate(startDate.getDate() - 30);
 
     const salesData = await SalesService.getProductSalesForPeriod(
@@ -207,19 +239,8 @@ export class ForecastService {
     }
 
     try {
-      const timeSeriesData = this.prepareTimeSeriesData(salesData);
-
-      if (timeSeriesData.length < 7) {
-        return this.bakerySmartPrediction(salesData);
-      }
-
-      if (timeSeriesData.length >= 7) {
-        const tfPrediction = await this.tensorFlowPrediction(timeSeriesData);
-        if (tfPrediction) {
-          return this.adjustForBakeryContext(tfPrediction, salesData);
-        }
-      }
-
+      // Skip TensorFlow for demo - use optimized smart prediction instead
+      // TF training is too slow with many products
       return this.bakerySmartPrediction(salesData);
     } catch (error) {
       console.error('Error in prediction:', error);
@@ -298,50 +319,68 @@ export class ForecastService {
     if (salesData.length < 3) return null;
 
     const quantities = salesData.map((s: any) => s.total_quantity);
+    const n = quantities.length;
 
-    const weights = quantities.map((_, i) => i + 1);
-    const totalWeight = weights.reduce((sum, w) => sum + w, 0);
-    const weightedSum = quantities.reduce((sum, q, i) => sum + (q * weights[i]), 0);
-    const weightedAvg = weightedSum / totalWeight;
+    // Use exponential weighted moving average (faster than full weighted average)
+    // More recent data gets exponentially more weight
+    const alpha = 0.3; // Smoothing factor
+    let ewma = quantities[0];
+    for (let i = 1; i < n; i++) {
+      ewma = alpha * quantities[i] + (1 - alpha) * ewma;
+    }
 
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowDayOfWeek = tomorrow.getDay();
 
-    const sameDaySales = salesData.filter((s: any) => {
+    // Day-of-week adjustment using pre-computed lookup
+    let sameDayTotal = 0;
+    let sameDayCount = 0;
+    for (const s of salesData) {
       const [year, month, day] = s.sale_date.split('-').map(Number);
       const saleDate = new Date(year, month - 1, day);
-      return saleDate.getDay() === tomorrowDayOfWeek;
-    });
-
-    let prediction = weightedAvg;
-
-    if (sameDaySales.length > 0) {
-      const sameDayAvg = sameDaySales.reduce((sum: number, s: any) => sum + s.total_quantity, 0) / sameDaySales.length;
-      prediction = (sameDayAvg * 0.6) + (weightedAvg * 0.4);
+      if (saleDate.getDay() === tomorrowDayOfWeek) {
+        sameDayTotal += s.total_quantity;
+        sameDayCount++;
+      }
     }
 
-    const recent3 = quantities.slice(-3);
-    const previous3 = quantities.slice(-6, -3);
-    if (previous3.length === 3 && recent3.length === 3) {
-      const recentAvg = recent3.reduce((sum, q) => sum + q, 0) / 3;
-      const previousAvg = previous3.reduce((sum, q) => sum + q, 0) / 3;
+    let prediction = ewma;
 
-      if (previousAvg > 0) {
-        const trendMultiplier = recentAvg / previousAvg;
-        if (trendMultiplier > 1.2 || trendMultiplier < 0.8) {
-          prediction = prediction * (1 + ((trendMultiplier - 1) * 0.3));
+    if (sameDayCount > 0) {
+      const sameDayAvg = sameDayTotal / sameDayCount;
+      // Blend day-of-week pattern with EWMA
+      prediction = (sameDayAvg * 0.5) + (ewma * 0.5);
+    }
+
+    // Simple trend detection using last 6 days
+    if (n >= 6) {
+      const recent3Avg = (quantities[n-1] + quantities[n-2] + quantities[n-3]) / 3;
+      const previous3Avg = (quantities[n-4] + quantities[n-5] + quantities[n-6]) / 3;
+
+      if (previous3Avg > 0) {
+        const trendMultiplier = recent3Avg / previous3Avg;
+        // Apply trend with dampening
+        if (trendMultiplier > 1.15 || trendMultiplier < 0.85) {
+          prediction = prediction * (1 + ((trendMultiplier - 1) * 0.25));
         }
       }
     }
 
-    const variance = this.calculateVariance(quantities);
-    const mean = quantities.reduce((sum, q) => sum + q, 0) / quantities.length;
-    const cv = mean > 0 ? Math.sqrt(variance) / mean : 1;
+    // Fast confidence calculation using coefficient of variation
+    const mean = quantities.reduce((sum, q) => sum + q, 0) / n;
+    if (mean === 0) return { quantity: 0, confidence: 0.3 };
+    
+    let sumSqDiff = 0;
+    for (let i = 0; i < n; i++) {
+      sumSqDiff += (quantities[i] - mean) ** 2;
+    }
+    const cv = Math.sqrt(sumSqDiff / n) / mean;
 
-    let confidence = Math.max(0.3, Math.min(0.85, 1 - (cv / 0.6)));
+    let confidence = Math.max(0.35, Math.min(0.85, 1 - (cv / 0.5)));
 
-    if (sameDaySales.length >= 3) {
+    // Boost confidence if we have good day-of-week data
+    if (sameDayCount >= 3) {
       confidence = Math.min(0.9, confidence + 0.1);
     }
 

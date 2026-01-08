@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -30,6 +30,30 @@ import { Plus, ShoppingBag, Calendar, Trash2, Check, Minus, ChevronLeft, Chevron
 
 // Cache for calendar dots - persists across renders
 const calendarCache = new Map<string, {[day: number]: number}>();
+
+// Cache for sales data by month - prevents re-fetching on navigation
+const salesDataCache = new Map<string, SaleWithProduct[]>();
+
+// Cache for pre-computed stats by month - instant access
+type MonthStats = {
+  totalRevenue: number;
+  totalItems: number;
+  byDay: { [day: number]: { revenue: number; items: number } };
+};
+const statsCache = new Map<string, MonthStats>();
+
+// Format number with commas for thousands/millions (e.g., 1,234.56)
+function formatNumber(num: number, decimals: number = 2): string {
+  return num.toLocaleString('en-US', { 
+    minimumFractionDigits: decimals, 
+    maximumFractionDigits: decimals 
+  });
+}
+
+// Format whole numbers with commas (no decimals)
+function formatWholeNumber(num: number): string {
+  return num.toLocaleString('en-US');
+}
 
 function formatLongDate(date: Date): string {
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -68,6 +92,47 @@ function getDaysInMonth(year: number, month: number) {
   return days;
 }
 
+// Memoized calendar day component to prevent re-renders
+const CalendarDayCell = React.memo(({ 
+  day, 
+  isToday, 
+  isFuture, 
+  hasSales, 
+  isSelected,
+  onPress 
+}: {
+  day: number;
+  isToday: boolean;
+  isFuture: boolean;
+  hasSales: boolean;
+  isSelected: boolean;
+  onPress: () => void;
+}) => {
+  return (
+    <TouchableOpacity
+      style={[
+        styles.calendarDay,
+        isToday && styles.calendarDayToday,
+        isFuture && styles.calendarDayDisabled,
+        isSelected && styles.calendarDaySelected,
+      ]}
+      onPress={onPress}
+      disabled={isFuture}>
+      <Text style={[
+        styles.calendarDayText,
+        isToday && styles.calendarDayTextToday,
+        isFuture && styles.calendarDayTextDisabled,
+        isSelected && styles.calendarDayTextSelected,
+      ]}>
+        {day}
+      </Text>
+      {hasSales && !isFuture && (
+        <View style={styles.salesDot} />
+      )}
+    </TouchableOpacity>
+  );
+});
+
 export default function SalesScreen() {
   const { user, profile } = useAuth();
   const currencySymbol = getCurrencySymbol(profile?.currency || 'PHP');
@@ -75,6 +140,7 @@ export default function SalesScreen() {
   const [products, setProducts] = useState<Product[]>([]);
   const [inventory, setInventory] = useState<InventoryWithProduct[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dataPreloaded, setDataPreloaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [wasRefreshing, setWasRefreshing] = useState(false);
   const [isPulling, setIsPulling] = useState(false);
@@ -112,6 +178,33 @@ export default function SalesScreen() {
   const [salesCountByDay, setSalesCountByDay] = useState<{[key: number]: number}>({});
   const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
+
+  // Memoize calendar grid data to prevent recalculation on every render
+  const calendarGridData = useMemo(() => {
+    const days = getDaysInMonth(selectedYear, selectedMonth);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayTime = today.getTime();
+    
+    // Pre-compute all day info to avoid Date creation during render
+    return days.map((day, index) => {
+      if (day === null) {
+        return { day: null, index, key: `empty-${index}` };
+      }
+      
+      const dateTime = new Date(selectedYear, selectedMonth, day).getTime();
+      const isToday = dateTime === todayTime;
+      const isFuture = dateTime > todayTime;
+      
+      return {
+        day,
+        index,
+        key: `day-${day}`,
+        isToday,
+        isFuture,
+      };
+    });
+  }, [selectedYear, selectedMonth]);
 
   // Preload calendar dots for current and adjacent months
   const preloadCalendarData = useCallback(async (year: number, month: number) => {
@@ -154,88 +247,290 @@ export default function SalesScreen() {
     });
   }, [user, selectedMonth, selectedYear, preloadCalendarData]);
 
-  const loadData = useCallback(async () => {
-    if (!user) return;
-    try {
-      let salesData;
-      
-      // Helper to format date as YYYY-MM-DD without timezone issues
-      const formatDateStr = (year: number, month: number, day: number) => 
-        `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      
-      if (filterMode === 'today') {
-        salesData = await SalesService.getTodaysSales(user.uid);
-      } else if (filterMode === 'month') {
-        if (selectedDay !== null) {
-          // Show specific day - use same date for start and end
-          const dayStr = formatDateStr(selectedYear, selectedMonth, selectedDay);
-          salesData = await SalesService.getSales(user.uid, dayStr, dayStr);
-        } else {
-          // Show entire month - use paginated query for better performance
-          const lastDayOfMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
-          const startStr = formatDateStr(selectedYear, selectedMonth, 1);
-          const endStr = formatDateStr(selectedYear, selectedMonth, lastDayOfMonth);
-          salesData = await SalesService.getSales(user.uid, startStr, endStr);
-        }
-      } else {
-        const startStr = formatDateStr(selectedYear, 0, 1);
-        const endStr = formatDateStr(selectedYear, 11, 31);
-        salesData = await SalesService.getSales(user.uid, startStr, endStr);
-      }
+  // Load calendar dots - synchronous when cached
+  const loadCalendarDots = useCallback(() => {
+    if (!user || filterMode !== 'month') return;
+    
+    // Try cache first - instant (synchronous)
+    const cacheKey = `${user.uid}-${selectedYear}-${selectedMonth}`;
+    if (calendarCache.has(cacheKey)) {
+      setSalesCountByDay(calendarCache.get(cacheKey)!);
+      return;
+    }
+    
+    // Not cached - load asynchronously as fallback
+    setCalendarLoading(true);
+    preloadCalendarData(selectedYear, selectedMonth).then(countByDay => {
+      setSalesCountByDay(countByDay || {});
+      setCalendarLoading(false);
+    });
+  }, [user, filterMode, selectedYear, selectedMonth, preloadCalendarData]);
 
+  // Load sales list data - synchronous when cached, async fallback
+  const loadSalesData = useCallback(() => {
+    if (!user) return;
+    
+    // Helper to format date as YYYY-MM-DD without timezone issues
+    const formatDateStr = (year: number, month: number, day: number) => 
+      `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    
+    if (filterMode === 'today') {
+      // Today's sales - fetch async (small dataset, fast)
+      SalesService.getTodaysSales(user.uid).then(setSales).catch(console.error);
+      return;
+    }
+    
+    if (filterMode === 'month') {
+      const monthCacheKey = `${user.uid}-${selectedYear}-${selectedMonth}-month`;
+      
+      // Try to get from cache first (synchronous)
+      if (salesDataCache.has(monthCacheKey)) {
+        const monthData = salesDataCache.get(monthCacheKey)!;
+        
+        if (selectedDay !== null) {
+          // Filter for specific day
+          const dayStr = formatDateStr(selectedYear, selectedMonth, selectedDay);
+          setSales(monthData.filter(s => s.sale_date === dayStr));
+        } else {
+          // Entire month
+          setSales(monthData);
+        }
+        return;
+      }
+      
+      // Fallback: fetch async
+      const lastDayOfMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
+      const startStr = formatDateStr(selectedYear, selectedMonth, 1);
+      const endStr = formatDateStr(selectedYear, selectedMonth, lastDayOfMonth);
+      
+      SalesService.getSales(user.uid, startStr, endStr).then(data => {
+        salesDataCache.set(monthCacheKey, data);
+        if (selectedDay !== null) {
+          const dayStr = formatDateStr(selectedYear, selectedMonth, selectedDay);
+          setSales(data.filter(s => s.sale_date === dayStr));
+        } else {
+          setSales(data);
+        }
+      }).catch(console.error);
+      return;
+    }
+    
+    // Year view - fetch async
+    const startStr = formatDateStr(selectedYear, 0, 1);
+    const endStr = formatDateStr(selectedYear, 11, 31);
+    SalesService.getSales(user.uid, startStr, endStr).then(setSales).catch(console.error);
+  }, [user, filterMode, selectedMonth, selectedYear, selectedDay]);
+
+  // Invalidate sales data cache for a month
+  const invalidateSalesCache = useCallback((year?: number, month?: number) => {
+    if (!user) return;
+    const y = year ?? selectedYear;
+    const m = month ?? selectedMonth;
+    const cacheKey = `${user.uid}-${y}-${m}-month`;
+    salesDataCache.delete(cacheKey);
+  }, [user, selectedYear, selectedMonth]);
+
+  // Load products and inventory - only needed once or on refresh
+  const loadProductsAndInventory = useCallback(async () => {
+    if (!user) return;
+    
+    try {
       const [productsData, inventoryData] = await Promise.all([
         ProductService.getProducts(user.uid),
         InventoryService.getInventory(user.uid),
       ]);
       
-      setSales(salesData);
       setProducts(productsData.filter(p => p.is_active && p.product_type === 'product'));
       setInventory(inventoryData);
+    } catch (error: any) {
+      console.error('Error loading products/inventory:', error.message);
+    }
+  }, [user]);
 
-      // Load calendar dots using optimized cached query
-      if (filterMode === 'month') {
-        setCalendarLoading(true);
-        const countByDay = await preloadCalendarData(selectedYear, selectedMonth);
-        setSalesCountByDay(countByDay || {});
-        setCalendarLoading(false);
-        
-        // Preload adjacent months in background
-        preloadAdjacentMonths();
+  // Preload ALL sales data for the last 6 months upfront
+  // This makes month navigation instant since everything is in memory
+  const preloadAllSalesData = useCallback(async () => {
+    if (!user) return;
+    
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth();
+    
+    // Helper to format date as YYYY-MM-DD
+    const formatDateStr = (year: number, month: number, day: number) => 
+      `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    
+    // Calculate 6 months back
+    const monthsToPreload: Array<{year: number, month: number}> = [];
+    for (let i = 0; i < 6; i++) {
+      let month = currentMonth - i;
+      let year = currentYear;
+      while (month < 0) {
+        month += 12;
+        year -= 1;
       }
+      monthsToPreload.push({ year, month });
+    }
+    
+    console.log('Preloading sales data for 6 months...');
+    
+    // Load all months in parallel for speed
+    await Promise.all(monthsToPreload.map(async ({ year, month }) => {
+      const calendarCacheKey = `${user.uid}-${year}-${month}`;
+      const salesCacheKey = `${user.uid}-${year}-${month}-month`;
+      const statsCacheKey = `${user.uid}-${year}-${month}-stats`;
+      
+      // Skip if already fully cached
+      if (calendarCache.has(calendarCacheKey) && salesDataCache.has(salesCacheKey) && statsCache.has(statsCacheKey)) {
+        return;
+      }
+      
+      const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
+      const startStr = formatDateStr(year, month, 1);
+      const endStr = formatDateStr(year, month, lastDayOfMonth);
+      
+      // Fetch sales data and calendar dots in parallel
+      const [salesData, countByDay] = await Promise.all([
+        salesDataCache.has(salesCacheKey) 
+          ? Promise.resolve(salesDataCache.get(salesCacheKey)!)
+          : SalesService.getSales(user.uid, startStr, endStr),
+        calendarCache.has(calendarCacheKey)
+          ? Promise.resolve(calendarCache.get(calendarCacheKey)!)
+          : SalesService.getSalesCountByDay(user.uid, year, month)
+      ]);
+      
+      // Cache the results
+      if (!salesDataCache.has(salesCacheKey)) {
+        salesDataCache.set(salesCacheKey, salesData);
+      }
+      if (!calendarCache.has(calendarCacheKey)) {
+        calendarCache.set(calendarCacheKey, countByDay);
+      }
+      
+      // Pre-compute and cache stats for this month
+      if (!statsCache.has(statsCacheKey)) {
+        const monthStats: MonthStats = {
+          totalRevenue: 0,
+          totalItems: 0,
+          byDay: {}
+        };
+        
+        for (const sale of salesData) {
+          const amount = Number(sale.total_amount);
+          const qty = sale.quantity;
+          monthStats.totalRevenue += amount;
+          monthStats.totalItems += qty;
+          
+          // Extract day from sale_date (YYYY-MM-DD)
+          const day = parseInt(sale.sale_date.split('-')[2]);
+          if (!monthStats.byDay[day]) {
+            monthStats.byDay[day] = { revenue: 0, items: 0 };
+          }
+          monthStats.byDay[day].revenue += amount;
+          monthStats.byDay[day].items += qty;
+        }
+        
+        statsCache.set(statsCacheKey, monthStats);
+      }
+    }));
+    
+    console.log('✓ All 6 months preloaded with stats');
+  }, [user]);
+
+  // Main load function - orchestrates loading with proper priority
+  const loadData = useCallback(async () => {
+    if (!user) return;
+    
+    try {
+      // For month view: Load calendar dots FIRST (fast, from cache if available)
+      if (filterMode === 'month') {
+        await loadCalendarDots();
+      }
+      
+      // Load sales data after interactions complete to keep UI responsive
+      InteractionManager.runAfterInteractions(async () => {
+        await loadSalesData();
+        setLoading(false);
+      });
+      
     } catch (error: any) {
       Alert.alert('Error', error.message);
-    } finally {
       setLoading(false);
     }
-  }, [user, filterMode, selectedMonth, selectedYear, selectedDay, preloadCalendarData, preloadAdjacentMonths]);
+  }, [user, filterMode, loadCalendarDots, loadSalesData]);
 
-  // Invalidate cache for a specific month when sales are modified
+  // Invalidate all caches for a specific month when sales are modified
   const invalidateCache = useCallback((date?: string) => {
     if (!user) return;
     
     if (date) {
       // Parse the date and invalidate that month's cache
       const [year, month] = date.split('-').map(Number);
-      const cacheKey = `${user.uid}-${year}-${month - 1}`;
-      calendarCache.delete(cacheKey);
+      const calendarCacheKey = `${user.uid}-${year}-${month - 1}`;
+      const salesCacheKey = `${user.uid}-${year}-${month - 1}-month`;
+      const statsCacheKey = `${user.uid}-${year}-${month - 1}-stats`;
+      calendarCache.delete(calendarCacheKey);
+      salesDataCache.delete(salesCacheKey);
+      statsCache.delete(statsCacheKey);
     } else {
       // Invalidate current month
-      const cacheKey = `${user.uid}-${selectedYear}-${selectedMonth}`;
-      calendarCache.delete(cacheKey);
+      const calendarCacheKey = `${user.uid}-${selectedYear}-${selectedMonth}`;
+      const salesCacheKey = `${user.uid}-${selectedYear}-${selectedMonth}-month`;
+      const statsCacheKey = `${user.uid}-${selectedYear}-${selectedMonth}-stats`;
+      calendarCache.delete(calendarCacheKey);
+      salesDataCache.delete(salesCacheKey);
+      statsCache.delete(statsCacheKey);
     }
   }, [user, selectedYear, selectedMonth]);
 
+  // Initial data preload - runs once on mount to cache all 6 months
+  useEffect(() => {
+    if (!user || dataPreloaded) return;
+    
+    const initializeData = async () => {
+      // Load products/inventory first
+      await loadProductsAndInventory();
+      
+      // Preload all 6 months of sales data in background
+      InteractionManager.runAfterInteractions(async () => {
+        await preloadAllSalesData();
+        setDataPreloaded(true);
+      });
+      
+      // Load current view data immediately
+      await loadData();
+    };
+    
+    initializeData();
+  }, [user, dataPreloaded, loadProductsAndInventory, preloadAllSalesData, loadData]);
+
+  // Reload current view when returning to screen (data is already preloaded)
   useFocusEffect(
     useCallback(() => {
-      loadData();
-    }, [loadData])
+      if (dataPreloaded) {
+        // Data is preloaded, just update current view from cache
+        loadSalesData();
+        if (filterMode === 'month') {
+          loadCalendarDots();
+        }
+      }
+    }, [dataPreloaded, loadSalesData, filterMode, loadCalendarDots])
   );
 
+  // React to month/day/filter changes - data loads instantly from cache
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (!dataPreloaded) return;
+    
+    // Update sales list from cache
+    loadSalesData();
+    
+    // Update calendar dots from cache
+    if (filterMode === 'month') {
+      loadCalendarDots();
+    }
+  }, [dataPreloaded, selectedMonth, selectedYear, selectedDay, filterMode, loadSalesData, loadCalendarDots]);
 
-  const onRefresh = useCallback(() => {
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
     setWasRefreshing(true);
     Animated.spring(pullProgress, {
@@ -245,7 +540,39 @@ export default function SalesScreen() {
       useNativeDriver: true,
     }).start();
     
-    loadData().finally(() => {
+    // Clear ALL caches on manual refresh
+    if (user) {
+      // Clear all cached data for this user
+      for (const key of calendarCache.keys()) {
+        if (key.startsWith(user.uid)) {
+          calendarCache.delete(key);
+        }
+      }
+      for (const key of salesDataCache.keys()) {
+        if (key.startsWith(user.uid)) {
+          salesDataCache.delete(key);
+        }
+      }
+      for (const key of statsCache.keys()) {
+        if (key.startsWith(user.uid)) {
+          statsCache.delete(key);
+        }
+      }
+    }
+    
+    try {
+      // Reload products/inventory
+      await loadProductsAndInventory();
+      
+      // Re-preload all 6 months
+      await preloadAllSalesData();
+      
+      // Update current view
+      await loadSalesData();
+      if (filterMode === 'month') {
+        await loadCalendarDots();
+      }
+    } finally {
       setTimeout(() => {
         setRefreshing(false);
         setIsPulling(false);
@@ -258,8 +585,8 @@ export default function SalesScreen() {
           setWasRefreshing(false);
         });
       }, 500);
-    });
-  }, [loadData]);
+    }
+  }, [user, filterMode, loadProductsAndInventory, preloadAllSalesData, loadSalesData, loadCalendarDots]);
 
   // Chef hat spin animation - only when refreshing
   useEffect(() => {
@@ -309,7 +636,8 @@ export default function SalesScreen() {
     }
   };
 
-  const goToPreviousMonth = () => {
+  const goToPreviousMonth = useCallback(() => {
+    // Data is preloaded, navigation is instant
     if (selectedMonth === 0) {
       setSelectedMonth(11);
       setSelectedYear(selectedYear - 1);
@@ -317,9 +645,9 @@ export default function SalesScreen() {
       setSelectedMonth(selectedMonth - 1);
     }
     setSelectedDay(null);
-  };
+  }, [selectedMonth, selectedYear]);
 
-  const goToNextMonth = () => {
+  const goToNextMonth = useCallback(() => {
     const today = new Date();
     const nextMonth = selectedMonth === 11 ? 0 : selectedMonth + 1;
     const nextYear = selectedMonth === 11 ? selectedYear + 1 : selectedYear;
@@ -330,6 +658,7 @@ export default function SalesScreen() {
       return;
     }
 
+    // Data is preloaded, navigation is instant
     if (selectedMonth === 11) {
       setSelectedMonth(0);
       setSelectedYear(selectedYear + 1);
@@ -337,7 +666,7 @@ export default function SalesScreen() {
       setSelectedMonth(selectedMonth + 1);
     }
     setSelectedDay(null);
-  };
+  }, [selectedMonth, selectedYear]);
 
   const goToCurrentMonth = () => {
     const today = new Date();
@@ -550,8 +879,40 @@ export default function SalesScreen() {
     );
   }
 
-  const todayRevenue = sales.reduce((sum, sale) => sum + Number(sale.total_amount), 0);
-  const todayItems = sales.reduce((sum, sale) => sum + sale.quantity, 0);
+  // Get stats from pre-computed cache for instant access
+  const getStats = (): { revenue: number; items: number } => {
+    if (filterMode === 'today') {
+      // Today's stats - calculate from sales array (small dataset)
+      return {
+        revenue: sales.reduce((sum, sale) => sum + Number(sale.total_amount), 0),
+        items: sales.reduce((sum, sale) => sum + sale.quantity, 0)
+      };
+    }
+    
+    if (filterMode === 'month' && user) {
+      const statsCacheKey = `${user.uid}-${selectedYear}-${selectedMonth}-stats`;
+      const cachedStats = statsCache.get(statsCacheKey);
+      
+      if (cachedStats) {
+        if (selectedDay !== null) {
+          // Specific day stats from cache
+          const dayStats = cachedStats.byDay[selectedDay];
+          return dayStats || { revenue: 0, items: 0 };
+        } else {
+          // Entire month stats from cache
+          return { revenue: cachedStats.totalRevenue, items: cachedStats.totalItems };
+        }
+      }
+    }
+    
+    // Fallback: calculate from sales array
+    return {
+      revenue: sales.reduce((sum, sale) => sum + Number(sale.total_amount), 0),
+      items: sales.reduce((sum, sale) => sum + sale.quantity, 0)
+    };
+  };
+  
+  const { revenue: todayRevenue, items: todayItems } = getStats();
 
   // Check if we're viewing today's data
   const isViewingToday = filterMode === 'today' ||
@@ -708,46 +1069,28 @@ export default function SalesScreen() {
             </View>
 
             <View style={styles.calendarGrid}>
-              {getDaysInMonth(selectedYear, selectedMonth).map((day, index) => {
-                if (day === null) {
-                  return <View key={`empty-${index}`} style={styles.calendarDay} />;
+              {calendarGridData.map((item) => {
+                if (item.day === null) {
+                  return <View key={item.key} style={styles.calendarDay} />;
                 }
 
-                const date = new Date(selectedYear, selectedMonth, day);
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                const isToday = date.toDateString() === today.toDateString();
-                const isFuture = date > today;
-                const hasSales = salesCountByDay[day] > 0;
-                const isSelected = selectedDay === day;
+                const hasSales = salesCountByDay[item.day] > 0;
+                const isSelected = selectedDay === item.day;
 
                 return (
-                  <TouchableOpacity
-                    key={`day-${index}`}
-                    style={[
-                      styles.calendarDay,
-                      isToday && styles.calendarDayToday,
-                      isFuture && styles.calendarDayDisabled,
-                      isSelected && styles.calendarDaySelected,
-                    ]}
+                  <CalendarDayCell
+                    key={item.key}
+                    day={item.day}
+                    isToday={item.isToday}
+                    isFuture={item.isFuture}
+                    hasSales={hasSales}
+                    isSelected={isSelected}
                     onPress={() => {
-                      if (!isFuture) {
-                        setSelectedDay(selectedDay === day ? null : day);
+                      if (!item.isFuture) {
+                        setSelectedDay(selectedDay === item.day ? null : item.day);
                       }
                     }}
-                    disabled={isFuture}>
-                    <Text style={[
-                      styles.calendarDayText,
-                      isToday && styles.calendarDayTextToday,
-                      isFuture && styles.calendarDayTextDisabled,
-                      isSelected && styles.calendarDayTextSelected,
-                    ]}>
-                      {day}
-                    </Text>
-                    {hasSales && !isFuture && (
-                      <View style={styles.salesDot} />
-                    )}
-                  </TouchableOpacity>
+                  />
                 );
               })}
             </View>
@@ -766,11 +1109,11 @@ export default function SalesScreen() {
 
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
-            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{todayRevenue.toFixed(2)}</Text>
+            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{formatNumber(todayRevenue)}</Text>
             <Text style={styles.statLabel} numberOfLines={1}>Total Revenue</Text>
           </View>
           <View style={styles.statCard}>
-            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{todayItems}</Text>
+            <Text style={styles.statValue} numberOfLines={1} adjustsFontSizeToFit>{formatWholeNumber(todayItems)}</Text>
             <Text style={styles.statLabel} numberOfLines={1}>Items Sold</Text>
           </View>
         </View>
@@ -824,7 +1167,7 @@ export default function SalesScreen() {
                   <View style={styles.saleInfo}>
                     <Text style={styles.saleName}>{sale.product?.name}</Text>
                     <Text style={styles.saleDetails}>
-                      {`${sale.quantity} × ${currencySymbol}${Number(sale.unit_price).toFixed(2)}`}
+                      {`${formatWholeNumber(sale.quantity)} × ${currencySymbol}${formatNumber(Number(sale.unit_price))}`}
                     </Text>
                     <Text style={styles.saleTime}>
                       {formatTime12Hour(sale.sale_time)}
@@ -834,7 +1177,7 @@ export default function SalesScreen() {
                     )}
                   </View>
                   <View style={styles.saleRight}>
-                    <Text style={styles.saleAmount} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{Number(sale.total_amount).toFixed(2)}</Text>
+                    <Text style={styles.saleAmount} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{formatNumber(Number(sale.total_amount))}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -1022,7 +1365,7 @@ export default function SalesScreen() {
                                 {product.name || 'Unnamed Product'}
                               </Text>
                               <Text style={styles.productOptionPrice}>
-                                {`${currencySymbol}${Number(product.price || 0).toFixed(2)} per ${product.unit || 'unit'}`}
+                                {`${currencySymbol}${formatNumber(Number(product.price || 0))} per ${product.unit || 'unit'}`}
                               </Text>
                               <Text style={styles.productStockInfo}>
                                 {`Stock: ${inventory.find(i => i.product_id === product.id)?.quantity || 0} ${product.unit || 'unit'}`}
@@ -1043,7 +1386,7 @@ export default function SalesScreen() {
                     <View>
                       <Text style={styles.selectedProductLabel}>Selected:</Text>
                       <Text style={styles.selectedProductText}>
-                        {`${selectedProduct.name || 'Product'} - ${currencySymbol}${Number(selectedProduct.price || 0).toFixed(2)}`}
+                        {`${selectedProduct.name || 'Product'} - ${currencySymbol}${formatNumber(Number(selectedProduct.price || 0))}`}
                       </Text>
                     </View>
                     <View style={styles.stockBadge}>
@@ -1100,7 +1443,7 @@ export default function SalesScreen() {
                   <View style={styles.totalPreview}>
                     <Text style={styles.totalLabel}>Total Amount:</Text>
                     <Text style={styles.totalValue}>
-                      {currencySymbol}{(parseInt(newSale.quantity) * (selectedProduct.price || 0)).toFixed(2)}
+                      {currencySymbol}{formatNumber(parseInt(newSale.quantity) * (selectedProduct.price || 0))}
                     </Text>
                   </View>
                 )}
@@ -1166,7 +1509,7 @@ export default function SalesScreen() {
                 <View style={styles.actionSheetHeader}>
                   <Text style={styles.actionSheetTitle}>{actionSheetSale?.product?.name}</Text>
                   <Text style={styles.actionSheetSubtitle}>
-                    {actionSheetSale ? `${actionSheetSale.quantity} × ${currencySymbol}${Number(actionSheetSale.unit_price).toFixed(2)}` : ''}
+                    {actionSheetSale ? `${formatWholeNumber(actionSheetSale.quantity)} × ${currencySymbol}${formatNumber(Number(actionSheetSale.unit_price))}` : ''}
                   </Text>
                 </View>
                 
@@ -1256,7 +1599,7 @@ export default function SalesScreen() {
                               {product.name}
                             </Text>
                             <Text style={styles.productOptionPrice}>
-                              {`${currencySymbol}${Number(product.price).toFixed(2)} per ${product.unit}`}
+                              {`${currencySymbol}${formatNumber(Number(product.price))} per ${product.unit}`}
                             </Text>
                             <Text style={styles.productStockInfo}>
                               {`Stock: ${inventory.find(i => i.product_id === product.id)?.quantity || 0} ${product.unit}`}
@@ -1276,7 +1619,7 @@ export default function SalesScreen() {
                     <View>
                       <Text style={styles.selectedProductLabel}>Selected:</Text>
                       <Text style={styles.selectedProductText}>
-                        {`${editSelectedProduct.name} - ${currencySymbol}${Number(editSelectedProduct.price).toFixed(2)}`}
+                        {`${editSelectedProduct.name} - ${currencySymbol}${formatNumber(Number(editSelectedProduct.price))}`}
                       </Text>
                     </View>
                     <View style={styles.stockBadge}>
@@ -1323,7 +1666,7 @@ export default function SalesScreen() {
                   <View style={styles.totalPreview}>
                     <Text style={styles.totalLabel}>Total Amount:</Text>
                     <Text style={styles.totalValue}>
-                      {currencySymbol}{(parseInt(editSale.quantity) * editSelectedProduct.price).toFixed(2)}
+                      {currencySymbol}{formatNumber(parseInt(editSale.quantity) * editSelectedProduct.price)}
                     </Text>
                   </View>
                 )}
