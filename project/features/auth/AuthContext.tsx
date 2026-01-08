@@ -7,6 +7,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { User } from 'firebase/auth';
 import { AuthService } from './auth.service';
 import { ProfileService } from './profile.service';
+import { GoogleAuthService, configureGoogleSignIn } from './google-auth.service';
 import { Profile } from '@/features/shared/types';
 import { initDatabase } from '@/features/shared/database';
 
@@ -16,6 +17,7 @@ interface AuthContextType {
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string, bakeryName: string) => Promise<void>;
+  signInWithGoogle: () => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
@@ -28,6 +30,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // Configure Google Sign-In
+    configureGoogleSignIn();
+
     initDatabase().then(() => {
       checkUser();
     });
@@ -87,8 +92,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const signInWithGoogle = async () => {
+    const { user: googleUser } = await GoogleAuthService.signInWithGoogle();
+    setUser(googleUser);
+    if (googleUser) {
+      await loadProfile(googleUser.uid);
+    }
+  };
+
   const signOut = async () => {
     await AuthService.signOut();
+    await GoogleAuthService.signOut();
     setUser(null);
     setProfile(null);
   };
@@ -107,6 +121,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading,
         signIn,
         signUp,
+        signInWithGoogle,
         signOut,
         refreshProfile,
       }}>

@@ -22,8 +22,9 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState('');
-  const { signIn } = useAuth();
+  const { signIn, signInWithGoogle } = useAuth();
 
   useEffect(() => {
     // Preload logo image
@@ -46,6 +47,20 @@ export default function LoginScreen() {
       setError(getFirebaseErrorMessage(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setGoogleLoading(true);
+    setError('');
+
+    try {
+      await signInWithGoogle();
+      router.replace('/(tabs)');
+    } catch (err: any) {
+      setError(err.message || 'Google Sign-In failed');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -119,13 +134,17 @@ export default function LoginScreen() {
               </View>
 
               <TouchableOpacity
-                style={styles.googleButton}
-                disabled={loading}
-                onPress={() => {
-                  setError('Google Sign-In is available in the APK version');
-                }}>
-                <Text style={styles.googleButtonIcon}>G</Text>
-                <Text style={styles.googleButtonText}>Continue with Google</Text>
+                style={[styles.googleButton, (loading || googleLoading) && styles.buttonDisabled]}
+                disabled={loading || googleLoading}
+                onPress={handleGoogleSignIn}>
+                {googleLoading ? (
+                  <ActivityIndicator color="#6B5439" />
+                ) : (
+                  <>
+                    <Text style={styles.googleButtonIcon}>G</Text>
+                    <Text style={styles.googleButtonText}>Continue with Google</Text>
+                  </>
+                )}
               </TouchableOpacity>
 
               <View style={styles.signupLinkContainer}>
