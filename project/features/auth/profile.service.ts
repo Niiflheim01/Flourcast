@@ -1,6 +1,10 @@
-import { getDatabase, generateId } from '@/lib/database';
-import { Profile } from '@/types/database';
-import { ProfileAvatarStorage } from '@/lib/image-storage';
+/**
+ * Profile Service
+ * Handles local SQLite profile storage and management
+ */
+
+import { getDatabase, generateId } from '@/features/shared/database';
+import { Profile } from '@/features/shared/types';
 
 export class ProfileService {
   static async createProfile(profile: Pick<Profile, 'id' | 'bakery_name' | 'email' | 'currency' | 'timezone' | 'avatar_url'>) {
@@ -35,15 +39,6 @@ export class ProfileService {
   static async updateProfile(userId: string, updates: Partial<Profile>) {
     const db = await getDatabase();
 
-    // If updating avatar, delete old one first
-    if (updates.avatar_url !== undefined) {
-      const currentProfile = await this.getProfile(userId);
-      if (currentProfile?.avatar_url && currentProfile.avatar_url !== updates.avatar_url) {
-        await ProfileAvatarStorage.deleteImage(currentProfile.avatar_url);
-      }
-    }
-
-    // Build dynamic query based on what fields are being updated
     const fieldsToUpdate: string[] = [];
     const values: any[] = [];
 
@@ -63,11 +58,32 @@ export class ProfileService {
       fieldsToUpdate.push('avatar_url = ?');
       values.push(updates.avatar_url);
     }
+    if (updates.admin_mode !== undefined) {
+      fieldsToUpdate.push('admin_mode = ?');
+      values.push(updates.admin_mode ? 1 : 0);
+    }
+    if (updates.role !== undefined) {
+      fieldsToUpdate.push('role = ?');
+      values.push(updates.role);
+    }
+    if (updates.current_role !== undefined) {
+      fieldsToUpdate.push('current_role = ?');
+      values.push(updates.current_role);
+    }
+    if (updates.admin_password_hash !== undefined) {
+      fieldsToUpdate.push('admin_password_hash = ?');
+      values.push(updates.admin_password_hash);
+    }
+    if (updates.recovery_email !== undefined) {
+      fieldsToUpdate.push('recovery_email = ?');
+      values.push(updates.recovery_email);
+    }
+    if (updates.admin_setup_completed !== undefined) {
+      fieldsToUpdate.push('admin_setup_completed = ?');
+      values.push(updates.admin_setup_completed ? 1 : 0);
+    }
 
-    // Always update the updated_at timestamp
     fieldsToUpdate.push('updated_at = datetime(\'now\')');
-
-    // Add userId at the end for WHERE clause
     values.push(userId);
 
     const query = `
@@ -83,13 +99,6 @@ export class ProfileService {
 
   static async deleteProfile(userId: string) {
     const db = await getDatabase();
-    
-    // Delete avatar image before deleting profile
-    const profile = await this.getProfile(userId);
-    if (profile?.avatar_url) {
-      await ProfileAvatarStorage.deleteImage(profile.avatar_url);
-    }
-    
     await db.runAsync('DELETE FROM profiles WHERE id = ?', [userId]);
   }
 }

@@ -1,3 +1,8 @@
+/**
+ * Shared Database Module
+ * Core SQLite database initialization and management
+ */
+
 import * as SQLite from 'expo-sqlite';
 
 const DB_NAME = 'flourcast.db';
@@ -181,7 +186,6 @@ const runMigrations = async (database: SQLite.SQLiteDatabase) => {
     );
 
     const hasAvatarUrl = profileColumns.some(col => col.name === 'avatar_url');
-
     if (!hasAvatarUrl) {
       console.log('Running migration: Adding avatar_url to profiles');
       await database.execAsync('ALTER TABLE profiles ADD COLUMN avatar_url TEXT;');
@@ -193,7 +197,6 @@ const runMigrations = async (database: SQLite.SQLiteDatabase) => {
     );
 
     const hasProductType = productColumns.some(col => col.name === 'product_type');
-
     if (!hasProductType) {
       console.log('Running migration: Adding product_type to products');
       await database.execAsync("ALTER TABLE products ADD COLUMN product_type TEXT NOT NULL DEFAULT 'product';");
@@ -201,7 +204,6 @@ const runMigrations = async (database: SQLite.SQLiteDatabase) => {
 
     // Check if admin_mode column exists in profiles table
     const hasAdminMode = profileColumns.some(col => col.name === 'admin_mode');
-
     if (!hasAdminMode) {
       console.log('Running migration: Adding admin_mode to profiles');
       await database.execAsync('ALTER TABLE profiles ADD COLUMN admin_mode INTEGER NOT NULL DEFAULT 0;');
@@ -238,7 +240,7 @@ const runMigrations = async (database: SQLite.SQLiteDatabase) => {
       await database.execAsync("ALTER TABLE profiles ADD COLUMN current_role TEXT NOT NULL DEFAULT 'admin';");
     }
 
-    // Add created_by field to sales table for tracking who created the sale
+    // Add created_by field to sales table
     const salesColumns = await database.getAllAsync<{ name: string }>(
       "PRAGMA table_info(sales)"
     );
@@ -250,7 +252,6 @@ const runMigrations = async (database: SQLite.SQLiteDatabase) => {
     }
   } catch (error) {
     console.error('Migration error:', error);
-    // Don't throw - migrations might fail if already applied
   }
 };
 

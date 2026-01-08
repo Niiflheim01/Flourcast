@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, Dimensions, Platform, TouchableOpacity, FlatList, SafeAreaView } from 'react-native';
-import { useAuth } from '@/contexts/AuthContext';
-import { SalesService } from '@/services/sales.service.sqlite';
-import { ProductService } from '@/services/product.service.sqlite';
-import { InventoryService } from '@/services/inventory.service.sqlite';
+import { useAuth } from '@/features/auth';
+import { SalesService } from '@/features/sales';
+import { ProductService, InventoryService } from '@/features/inventory';
 import { TrendingUp, TrendingDown, AlertCircle, RefreshCw, FileText, ChevronDown, ChevronUp, Bell, X } from 'lucide-react-native';
 import { useFocusEffect, router } from 'expo-router';
 import { CalendarModal } from '@/components/CalendarModal';
@@ -25,7 +24,7 @@ export default function DashboardScreen() {
   });
   const [inventory, setInventory] = useState<any[]>([]);
   const [showCalendar, setShowCalendar] = useState(false);
-  const [dailyReport, setDailyReport] = useState('');
+  const [dailyReport, setDailyReport] = useState<string[]>([]);
   const [reportExpanded, setReportExpanded] = useState(false);
   const [upcomingReminders, setUpcomingReminders] = useState<any[]>([]);
 
@@ -165,7 +164,7 @@ export default function DashboardScreen() {
         topProducts,
         weeklyData,
       }, inventory, products);
-      setDailyReport(report as any);
+      setDailyReport(report);
     } catch (error: any) {
       console.error('Error loading dashboard data:', error);
     } finally {

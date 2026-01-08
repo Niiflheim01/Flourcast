@@ -1,14 +1,14 @@
-import { getDatabase, generateId } from '@/lib/database';
-import { Forecast, ForecastWithProduct } from '@/types/database';
-import { SalesService } from './sales.service.sqlite';
+/**
+ * Forecast Service
+ * Handles demand prediction using TensorFlow.js and bakery-specific algorithms
+ */
+
+import { getDatabase, generateId } from '@/features/shared/database';
+import { Forecast, ForecastWithProduct } from '@/features/shared/types';
+import { formatDate } from '@/features/shared/utils';
 import * as tf from '@tensorflow/tfjs';
 
 const MODEL_VERSION = 'v1.0.0';
-
-interface TrainingData {
-  dates: Date[];
-  quantities: number[];
-}
 
 export class ForecastService {
   static async getForecastsForDate(userId: string, forecastDate: string): Promise<ForecastWithProduct[]> {
@@ -99,19 +99,16 @@ export class ForecastService {
   static async regenerateForecastsForTomorrow(userId: string) {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = this.formatDate(tomorrow);
+    const tomorrowStr = formatDate(tomorrow);
 
-    // Delete existing forecasts for tomorrow
     await this.deleteForecastsForDate(userId, tomorrowStr);
-
-    // Generate new forecasts
     return this.generateForecastsForTomorrow(userId);
   }
 
   static async generateForecastsForTomorrow(userId: string) {
     const db = await getDatabase();
+    const { SalesService } = await import('@/features/sales/sales.service');
 
-    // Get all active products
     const products = await db.getAllAsync<any>(
       'SELECT id, name FROM products WHERE user_id = ? AND is_active = 1',
       [userId]
@@ -119,9 +116,8 @@ export class ForecastService {
 
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const tomorrowStr = this.formatDate(tomorrow);
+    const tomorrowStr = formatDate(tomorrow);
 
-    // Check if forecasts already exist for tomorrow
     const existingForecasts = await db.getFirstAsync<any>(
       'SELECT COUNT(*) as count FROM forecasts WHERE user_id = ? AND forecast_date = ?',
       [userId, tomorrowStr]
@@ -135,7 +131,7 @@ export class ForecastService {
 
     for (const product of products) {
       try {
-        const prediction = await this.predictDemand(userId, product.id);
+        const prediction = await this.predictDemand(userId, product.id, SalesService);
 
         if (prediction) {
           const forecast = await this.createForecast({
@@ -156,42 +152,40 @@ export class ForecastService {
     return this.getForecastsForDate(userId, tomorrowStr);
   }
 
-  private static async predictDemand(userId: string, productId: string): Promise<{ quantity: number; confidence: number } | null> {
+  private static async predictDemand(
+    userId: string, 
+    productId: string,
+    SalesService: any
+  ): Promise<{ quantity: number; confidence: number } | null> {
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 30); // Last 30 days
+    startDate.setDate(startDate.getDate() - 30);
 
     const salesData = await SalesService.getProductSalesForPeriod(
       userId,
       productId,
-      this.formatDate(startDate),
-      this.formatDate(endDate)
+      formatDate(startDate),
+      formatDate(endDate)
     );
 
     if (salesData.length < 7) {
-      // Not enough data - need at least 7 days
       return null;
     }
 
-    // Use hybrid approach: TensorFlow for patterns + smart adjustments for bakery context
     try {
-      // Prepare time series data
       const timeSeriesData = this.prepareTimeSeriesData(salesData);
 
       if (timeSeriesData.length < 7) {
         return this.bakerySmartPrediction(salesData);
       }
 
-      // For products with consistent daily sales (7+ days), use TensorFlow
       if (timeSeriesData.length >= 7) {
         const tfPrediction = await this.tensorFlowPrediction(timeSeriesData);
         if (tfPrediction) {
-          // Adjust TensorFlow prediction with bakery-specific logic
           return this.adjustForBakeryContext(tfPrediction, salesData);
         }
       }
 
-      // Fall back to smart bakery prediction
       return this.bakerySmartPrediction(salesData);
     } catch (error) {
       console.error('Error in prediction:', error);
@@ -199,13 +193,13 @@ export class ForecastService {
     }
   }
 
-  private static async tensorFlowPrediction(timeSeriesData: { date: Date; quantity: number; dayOfWeek: number }[]): Promise<{ quantity: number; confidence: number } | null> {
+  private static async tensorFlowPrediction(
+    timeSeriesData: { date: Date; quantity: number; dayOfWeek: number }[]
+  ): Promise<{ quantity: number; confidence: number } | null> {
     try {
-      // Normalize data
       const quantities = timeSeriesData.map(d => d.quantity);
       const { normalized, min, max } = this.normalizeData(quantities);
 
-      // Create sequences for LSTM
       const sequenceLength = 7;
       const { xs, ys } = this.createSequences(normalized, sequenceLength);
 
@@ -215,7 +209,6 @@ export class ForecastService {
         return null;
       }
 
-      // Build and train lightweight model (fewer epochs for speed)
       const model = this.buildLSTMModel(sequenceLength);
 
       await model.fit(xs, ys, {
@@ -225,21 +218,17 @@ export class ForecastService {
         verbose: 0,
       });
 
-      // Make prediction
       const lastSequence = normalized.slice(-sequenceLength);
       const inputTensor = tf.tensor3d([lastSequence.map(v => [v])]);
       const predictionTensor = model.predict(inputTensor) as tf.Tensor;
       const normalizedPrediction = (await predictionTensor.data())[0];
 
-      // Denormalize
       const prediction = this.denormalize(normalizedPrediction, min, max);
 
-      // Calculate confidence from loss
       const finalLoss = await model.evaluate(xs, ys) as tf.Tensor;
       const lossValue = (await finalLoss.data())[0];
       const confidence = Math.max(0.3, Math.min(0.95, 1 - Math.min(lossValue, 0.7)));
 
-      // Cleanup
       xs.dispose();
       ys.dispose();
       inputTensor.dispose();
@@ -262,19 +251,16 @@ export class ForecastService {
 
     const quantities = salesData.map((s: any) => s.total_quantity);
 
-    // Calculate weighted average (recent days matter more)
-    const weights = quantities.map((_, i) => i + 1); // More weight to recent days
+    const weights = quantities.map((_, i) => i + 1);
     const totalWeight = weights.reduce((sum, w) => sum + w, 0);
     const weightedSum = quantities.reduce((sum, q, i) => sum + (q * weights[i]), 0);
     const weightedAvg = weightedSum / totalWeight;
 
-    // Check day-of-week pattern (bakeries often have weekly patterns)
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const tomorrowDayOfWeek = tomorrow.getDay();
 
     const sameDaySales = salesData.filter((s: any) => {
-      // Parse date string "YYYY-MM-DD" without timezone issues
       const [year, month, day] = s.sale_date.split('-').map(Number);
       const saleDate = new Date(year, month - 1, day);
       return saleDate.getDay() === tomorrowDayOfWeek;
@@ -282,39 +268,31 @@ export class ForecastService {
 
     let prediction = weightedAvg;
 
-    // If we have same-day history, blend it in
     if (sameDaySales.length > 0) {
       const sameDayAvg = sameDaySales.reduce((sum: number, s: any) => sum + s.total_quantity, 0) / sameDaySales.length;
-      // Give 60% weight to same-day pattern, 40% to weighted average
       prediction = (sameDayAvg * 0.6) + (weightedAvg * 0.4);
     }
 
-    // Check for recent trend
     const recent3 = quantities.slice(-3);
     const previous3 = quantities.slice(-6, -3);
     if (previous3.length === 3 && recent3.length === 3) {
       const recentAvg = recent3.reduce((sum, q) => sum + q, 0) / 3;
       const previousAvg = previous3.reduce((sum, q) => sum + q, 0) / 3;
 
-      // If there's a strong trend, adjust prediction
       if (previousAvg > 0) {
         const trendMultiplier = recentAvg / previousAvg;
         if (trendMultiplier > 1.2 || trendMultiplier < 0.8) {
-          // Apply 30% of the trend
           prediction = prediction * (1 + ((trendMultiplier - 1) * 0.3));
         }
       }
     }
 
-    // Calculate confidence based on consistency
     const variance = this.calculateVariance(quantities);
     const mean = quantities.reduce((sum, q) => sum + q, 0) / quantities.length;
     const cv = mean > 0 ? Math.sqrt(variance) / mean : 1;
 
-    // Lower variability = higher confidence
     let confidence = Math.max(0.3, Math.min(0.85, 1 - (cv / 0.6)));
 
-    // Boost confidence if we have good same-day data
     if (sameDaySales.length >= 3) {
       confidence = Math.min(0.9, confidence + 0.1);
     }
@@ -329,22 +307,18 @@ export class ForecastService {
     prediction: { quantity: number; confidence: number },
     salesData: any[]
   ): { quantity: number; confidence: number } {
-    // Check if quantity is consistently low (specialty items)
     const quantities = salesData.map((s: any) => s.total_quantity);
     const avgQuantity = quantities.reduce((sum, q) => sum + q, 0) / quantities.length;
 
-    // For low-volume specialty items, round up slightly to avoid stockouts
     if (avgQuantity < 5 && prediction.quantity > 0) {
       prediction.quantity = Math.ceil(prediction.quantity * 1.1);
     }
 
-    // Check for weekend effect (if tomorrow is Sat/Sun)
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const isWeekend = tomorrow.getDay() === 0 || tomorrow.getDay() === 6;
 
     if (isWeekend) {
-      // Calculate weekend multiplier from historical data
       const weekendSales = salesData.filter((s: any) => {
         const [year, month, day] = s.sale_date.split('-').map(Number);
         const date = new Date(year, month - 1, day);
@@ -362,7 +336,6 @@ export class ForecastService {
 
         if (weekdayAvg > 0) {
           const weekendMultiplier = weekendAvg / weekdayAvg;
-          // Apply weekend pattern if significant
           if (weekendMultiplier > 1.2 || weekendMultiplier < 0.8) {
             prediction.quantity = Math.round(prediction.quantity * weekendMultiplier);
           }
@@ -373,28 +346,8 @@ export class ForecastService {
     return prediction;
   }
 
-  private static fallbackPrediction(salesData: any[]): { quantity: number; confidence: number } | null {
-    if (salesData.length < 3) {
-      return null;
-    }
-
-    // Simple moving average fallback
-    const quantities = salesData.map((s: any) => s.total_quantity);
-    const recentDays = Math.min(7, quantities.length);
-    const recentQuantities = quantities.slice(-recentDays);
-    const movingAverage = recentQuantities.reduce((sum: number, q: number) => sum + q, 0) / recentDays;
-
-    const prediction = Math.max(0, Math.round(movingAverage));
-
-    return {
-      quantity: prediction,
-      confidence: 0.5 // Lower confidence for fallback method
-    };
-  }
-
   private static prepareTimeSeriesData(salesData: any[]): { date: Date; quantity: number; dayOfWeek: number }[] {
     return salesData.map((s: any) => {
-      // Parse date string "YYYY-MM-DD" without timezone issues
       const [year, month, day] = s.sale_date.split('-').map(Number);
       const date = new Date(year, month - 1, day);
       return {
@@ -433,7 +386,6 @@ export class ForecastService {
       targets.push(data[i + sequenceLength]);
     }
 
-    // Convert to tensors
     const xs = tf.tensor3d(sequences.map(seq => seq.map(val => [val])));
     const ys = tf.tensor2d(targets.map(val => [val]));
 
@@ -443,23 +395,16 @@ export class ForecastService {
   private static buildLSTMModel(sequenceLength: number): tf.Sequential {
     const model = tf.sequential();
 
-    // LSTM layer
     model.add(tf.layers.lstm({
       units: 32,
       inputShape: [sequenceLength, 1],
       returnSequences: false
     }));
 
-    // Dropout for regularization
     model.add(tf.layers.dropout({ rate: 0.2 }));
-
-    // Dense layer
     model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
-
-    // Output layer
     model.add(tf.layers.dense({ units: 1, activation: 'linear' }));
 
-    // Compile model
     model.compile({
       optimizer: tf.train.adam(0.001),
       loss: 'meanSquaredError',
@@ -477,18 +422,11 @@ export class ForecastService {
     return squaredDiffs.reduce((sum, val) => sum + val, 0) / values.length;
   }
 
-  private static formatDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
   static async getForecastAccuracy(userId: string, days: number = 7): Promise<number> {
     const db = await getDatabase();
 
     const endDate = new Date();
-    endDate.setDate(endDate.getDate() - 1); // Yesterday
+    endDate.setDate(endDate.getDate() - 1);
     const startDate = new Date();
     startDate.setDate(endDate.getDate() - days);
 
@@ -505,13 +443,12 @@ export class ForecastService {
 
     const results = await db.getAllAsync<any>(query, [
       userId,
-      this.formatDate(startDate),
-      this.formatDate(endDate)
+      formatDate(startDate),
+      formatDate(endDate)
     ]);
 
     if (results.length === 0) return 0;
 
-    // Calculate Mean Absolute Percentage Error (MAPE)
     let totalError = 0;
     let count = 0;
 

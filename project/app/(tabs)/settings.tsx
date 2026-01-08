@@ -1,35 +1,12 @@
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput, Modal, Switch, SafeAreaView } from 'react-native';
 import { router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/features/auth';
+import { ProfileService } from '@/features/auth';
+import { getCurrencySymbol } from '@/features/shared';
+import { AdminRoleManager, CURRENCIES, TIMEZONES } from '@/features/settings';
 import { User, LogOut, Store, Edit, Settings, ChevronRight, Bell, Globe, ChevronDown } from 'lucide-react-native';
 import { useState } from 'react';
 import ImagePickerButton from '@/components/ImagePickerButton';
-import { ProfileService } from '@/services/profile.service';
-import { getCurrencySymbol } from '@/lib/currency';
-
-const CURRENCIES = [
-  { code: 'PHP', name: 'Philippine Peso (₱)' },
-  { code: 'USD', name: 'US Dollar ($)' },
-  { code: 'EUR', name: 'Euro (€)' },
-  { code: 'GBP', name: 'British Pound (£)' },
-  { code: 'JPY', name: 'Japanese Yen (¥)' },
-  { code: 'AUD', name: 'Australian Dollar (A$)' },
-  { code: 'CAD', name: 'Canadian Dollar (C$)' },
-  { code: 'SGD', name: 'Singapore Dollar (S$)' },
-];
-
-const TIMEZONES = [
-  { value: 'Asia/Manila', label: 'Philippines (GMT+8)' },
-  { value: 'America/New_York', label: 'Eastern Time (GMT-5)' },
-  { value: 'America/Chicago', label: 'Central Time (GMT-6)' },
-  { value: 'America/Denver', label: 'Mountain Time (GMT-7)' },
-  { value: 'America/Los_Angeles', label: 'Pacific Time (GMT-8)' },
-  { value: 'Europe/London', label: 'London (GMT+0)' },
-  { value: 'Europe/Paris', label: 'Paris (GMT+1)' },
-  { value: 'Asia/Tokyo', label: 'Tokyo (GMT+9)' },
-  { value: 'Asia/Singapore', label: 'Singapore (GMT+8)' },
-  { value: 'Australia/Sydney', label: 'Sydney (GMT+10)' },
-];
 
 export default function ProfileScreen() {
   const { profile, signOut, refreshProfile } = useAuth();
@@ -42,7 +19,7 @@ export default function ProfileScreen() {
   const [adminMode, setAdminMode] = useState(profile?.admin_mode || false);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
   const [showTimezonePicker, setShowTimezonePicker] = useState(false);
-  const [appPreferencesModalVisible, setAppPreferencesModalVisible] = useState(false);
+
 
   const handleSignOut = () => {
     Alert.alert(
@@ -186,17 +163,13 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.divider} />
-
-            <TouchableOpacity 
-              style={styles.settingRow}
-              onPress={() => setAppPreferencesModalVisible(true)}>
-              <View style={styles.settingLeft}>
-                <Settings size={20} color="#8B6F47" />
-                <Text style={styles.settingLabel}>App Preferences</Text>
-              </View>
-              <ChevronRight size={20} color="#8B7355" />
-            </TouchableOpacity>
           </View>
+        </View>
+
+        {/* Access Control */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Access Control</Text>
+          <AdminRoleManager profile={profile} onRoleChange={refreshProfile} />
         </View>
 
         {/* Account Actions */}
@@ -318,44 +291,6 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      {/* App Preferences Modal */}
-      <Modal
-        visible={appPreferencesModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setAppPreferencesModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>App Preferences</Text>
-
-            <View style={styles.preferenceSection}>
-              <View style={styles.preferenceRow}>
-                <View style={styles.preferenceLeft}>
-                  <Settings size={20} color="#8B6F47" />
-                  <View style={styles.preferenceTextContainer}>
-                    <Text style={styles.preferenceLabel}>Admin Mode</Text>
-                    <Text style={styles.preferenceDescription}>Edit historical sales data</Text>
-                  </View>
-                </View>
-                <Switch
-                  value={adminMode}
-                  onValueChange={handleToggleAdminMode}
-                  trackColor={{ false: '#D4BA9C', true: '#C89D5E' }}
-                  thumbColor={adminMode ? '#8B6F47' : '#F5E6D3'}
-                />
-              </View>
-            </View>
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={() => setAppPreferencesModalVisible(false)}>
-                <Text style={styles.cancelButtonText}>Close</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
       </ScrollView>
     </SafeAreaView>
   );
@@ -642,35 +577,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: '#6b7280',
-  },
-  preferenceSection: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-  },
-  preferenceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  preferenceLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
-  preferenceTextContainer: {
-    flex: 1,
-  },
-  preferenceLabel: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#6B5439',
-    marginBottom: 4,
-  },
-  preferenceDescription: {
-    fontSize: 13,
-    color: '#8B7355',
   },
 });

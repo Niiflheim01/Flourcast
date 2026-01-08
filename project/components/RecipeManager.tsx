@@ -12,9 +12,9 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Plus, Trash2, ChefHat, X } from 'lucide-react-native';
-import { RecipeService, RecipeIngredient } from '@/services/recipe.service.sqlite';
-import { InventoryService } from '@/services/inventory.service.sqlite';
-import type { InventoryItem } from '@/types/inventory';
+import { RecipeService, InventoryService, RecipeIngredient } from '@/features/inventory';
+import { InventoryWithProduct } from '@/features/shared';
+import { useAuth } from '@/features/auth';
 
 interface RecipeManagerProps {
   productId: string;
@@ -31,8 +31,9 @@ export default function RecipeManager({
   onCostCalculated,
   currencySymbol = '₱',
 }: RecipeManagerProps) {
+  const { user } = useAuth();
   const [ingredients, setIngredients] = useState<RecipeIngredient[]>([]);
-  const [availableIngredients, setAvailableIngredients] = useState<InventoryItem[]>([]);
+  const [availableIngredients, setAvailableIngredients] = useState<InventoryWithProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [showIngredientPicker, setShowIngredientPicker] = useState(false);
   const [batchSize, setBatchSize] = useState('1');
@@ -43,18 +44,19 @@ export default function RecipeManager({
   }, [productId]);
 
   const loadData = async () => {
+    if (!user) return;
     try {
       setLoading(true);
       const [recipeIngredients, allInventory] = await Promise.all([
         RecipeService.getRecipeIngredients(productId),
-        InventoryService.getInventory(),
+        InventoryService.getInventory(user.uid),
       ]);
 
       setIngredients(recipeIngredients);
 
       // Filter to only show ingredients that are not already in the recipe
       const ingredientProducts = allInventory.filter(
-        item => item.product.product_type === 'ingredient'
+        item => item.product && item.product.product_type === 'ingredient'
       );
       setAvailableIngredients(ingredientProducts);
 
@@ -70,7 +72,8 @@ export default function RecipeManager({
     }
   };
 
-  const handleAddIngredient = async (ingredient: InventoryItem) => {
+  const handleAddIngredient = async (ingredient: InventoryWithProduct) => {
+    if (!ingredient.product) return;
     try {
       const batch = parseFloat(batchSize) || 1;
       await RecipeService.addIngredient(productId, ingredient.product.id, 1, batch);
@@ -176,7 +179,7 @@ export default function RecipeManager({
 
   const getFilteredIngredients = () => {
     const usedIds = new Set(ingredients.map(i => i.ingredient_id));
-    return availableIngredients.filter(item => !usedIds.has(item.product.id));
+    return availableIngredients.filter(item => item.product && !usedIds.has(item.product.id));
   };
 
   if (loading) {
@@ -257,7 +260,7 @@ export default function RecipeManager({
                         <TouchableOpacity
                           onPress={() => setEditingQuantity({ id: ingredient.id, value: ingredient.quantity.toString() })}>
                           <Text style={styles.ingredientQuantity}>
-                            {ingredient.quantity} {ingredient.ingredient_unit}
+                            {`${ingredient.quantity} ${ingredient.ingredient_unit}`}
                           </Text>
                         </TouchableOpacity>
                       )}
@@ -318,13 +321,13 @@ export default function RecipeManager({
               ) : (
                 getFilteredIngredients().map((item) => (
                   <TouchableOpacity
-                    key={item.product.id}
+                    key={item.product!.id}
                     style={styles.ingredientOption}
                     onPress={() => handleAddIngredient(item)}>
                     <View>
-                      <Text style={styles.ingredientOptionName}>{item.product.name}</Text>
+                      <Text style={styles.ingredientOptionName}>{item.product!.name}</Text>
                       <Text style={styles.ingredientOptionDetails}>
-                        Stock: {item.quantity} {item.product.unit} • Cost: {currencySymbol}{item.product.cost.toFixed(2)}/{item.product.unit}
+                        {`Stock: ${item.quantity} ${item.product!.unit} \u2022 Cost: ${currencySymbol}${(item.product!.cost || 0).toFixed(2)}/${item.product!.unit}`}
                       </Text>
                     </View>
                   </TouchableOpacity>

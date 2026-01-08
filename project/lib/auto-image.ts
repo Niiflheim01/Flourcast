@@ -234,6 +234,22 @@ export async function downloadImage(imageUrl: string): Promise<string | null> {
 }
 
 /**
+ * Fetch a single product image - searches and downloads the first result
+ */
+async function downloadImageFromSearch(searchTerm: string): Promise<string | null> {
+  try {
+    const images = await searchProductImages(searchTerm);
+    if (images.length > 0) {
+      return await downloadImage(images[0].url);
+    }
+    return null;
+  } catch (error) {
+    console.error('Error fetching product image:', error);
+    return null;
+  }
+}
+
+/**
  * Automatically fetch and set image for known products
  * Returns the image URI if successful, null otherwise
  */
@@ -257,7 +273,7 @@ export async function autoFetchProductImage(
   const searchTerm = getSearchTerm(productName);
   
   console.log(`Searching for image: ${productName} (term: ${searchTerm})`);
-  const imageUri = await fetchProductImage(searchTerm);
+  const imageUri = await downloadImageFromSearch(searchTerm);
 
   if (imageUri) {
     console.log(`Successfully found image for ${productName}`);

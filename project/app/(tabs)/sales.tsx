@@ -16,16 +16,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   SafeAreaView,
+  Switch,
 } from 'react-native';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
-import { useAuth } from '@/contexts/AuthContext';
-import { SalesService } from '@/services/sales.service.sqlite';
-import { ProductService } from '@/services/product.service.sqlite';
-import { InventoryService } from '@/services/inventory.service.sqlite';
-import { SaleWithProduct, Product, InventoryWithProduct } from '@/types/database';
-import { Plus, ShoppingBag, Calendar, Trash2, Check, Minus } from 'lucide-react-native';
-import { getCurrencySymbol } from '@/lib/currency';
+import { useAuth } from '@/features/auth';
+import { SalesService } from '@/features/sales';
+import { ProductService, InventoryService } from '@/features/inventory';
+import { SaleWithProduct, Product, InventoryWithProduct, getCurrencySymbol } from '@/features/shared';
+import { Plus, ShoppingBag, Calendar, Trash2, Check, Minus, ChevronLeft, ChevronRight } from 'lucide-react-native';
 
 function formatLongDate(date: Date): string {
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -38,6 +37,24 @@ function formatTime12Hour(timeString: string): string {
   const ampm = hour >= 12 ? 'PM' : 'AM';
   const hour12 = hour % 12 || 12;
   return `${hour12}:${minutes} ${ampm}`;
+}
+
+function getDaysInMonth(year: number, month: number) {
+  const firstDay = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0);
+  const daysInMonth = lastDay.getDate();
+  const startingDayOfWeek = firstDay.getDay();
+
+  const days: (number | null)[] = [];
+  // Add empty slots for days before the month starts
+  for (let i = 0; i < startingDayOfWeek; i++) {
+    days.push(null);
+  }
+  // Add actual days of the month
+  for (let i = 1; i <= daysInMonth; i++) {
+    days.push(i);
+  }
+  return days;
 }
 
 export default function SalesScreen() {
@@ -75,6 +92,8 @@ export default function SalesScreen() {
   const [customDate, setCustomDate] = useState('');
   const [customTime, setCustomTime] = useState('');
   const [showCustomDateInput, setShowCustomDateInput] = useState(false);
+  const [salesCountByDay, setSalesCountByDay] = useState<{[key: number]: number}>({});
+  const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -100,29 +119,27 @@ export default function SalesScreen() {
     try {
       let salesData;
       
+      // Helper to format date as YYYY-MM-DD without timezone issues
+      const formatDateStr = (year: number, month: number, day: number) => 
+        `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      
       if (filterMode === 'today') {
         salesData = await SalesService.getTodaysSales(user.uid);
       } else if (filterMode === 'month') {
         if (selectedDay !== null) {
-          // Show specific day
-          const date = new Date(selectedYear, selectedMonth, selectedDay);
-          const startStr = date.toISOString().split('T')[0];
-          const endDate = new Date(selectedYear, selectedMonth, selectedDay + 1);
-          const endStr = endDate.toISOString().split('T')[0];
-          salesData = await SalesService.getSales(user.uid, startStr, endStr);
+          // Show specific day - use same date for start and end
+          const dayStr = formatDateStr(selectedYear, selectedMonth, selectedDay);
+          salesData = await SalesService.getSales(user.uid, dayStr, dayStr);
         } else {
           // Show entire month
-          const startDate = new Date(selectedYear, selectedMonth, 1);
-          const endDate = new Date(selectedYear, selectedMonth + 1, 0);
-          const startStr = startDate.toISOString().split('T')[0];
-          const endStr = endDate.toISOString().split('T')[0];
+          const lastDayOfMonth = new Date(selectedYear, selectedMonth + 1, 0).getDate();
+          const startStr = formatDateStr(selectedYear, selectedMonth, 1);
+          const endStr = formatDateStr(selectedYear, selectedMonth, lastDayOfMonth);
           salesData = await SalesService.getSales(user.uid, startStr, endStr);
         }
       } else {
-        const startDate = new Date(selectedYear, 0, 1);
-        const endDate = new Date(selectedYear, 11, 31);
-        const startStr = startDate.toISOString().split('T')[0];
-        const endStr = endDate.toISOString().split('T')[0];
+        const startStr = formatDateStr(selectedYear, 0, 1);
+        const endStr = formatDateStr(selectedYear, 11, 31);
         salesData = await SalesService.getSales(user.uid, startStr, endStr);
       }
 
@@ -134,6 +151,29 @@ export default function SalesScreen() {
       setSales(salesData);
       setProducts(productsData.filter(p => p.is_active && p.product_type === 'product'));
       setInventory(inventoryData);
+
+      // Calculate sales count by day for month view - always calculate for the entire month
+      if (filterMode === 'month') {
+        // Fetch all sales for the entire month to show counts on calendar
+        const monthStart = new Date(selectedYear, selectedMonth, 1);
+        const monthEnd = new Date(selectedYear, selectedMonth + 1, 0);
+        // Format dates manually to avoid timezone issues
+        const startStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-01`;
+        const endStr = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`;
+        const allMonthSales = await SalesService.getSales(user.uid, startStr, endStr);
+
+        const countByDay: {[key: number]: number} = {};
+        allMonthSales.forEach(sale => {
+          // Parse date string directly to avoid timezone issues
+          // sale_date is in format "YYYY-MM-DD"
+          const dateParts = sale.sale_date.split('-');
+          if (dateParts.length === 3) {
+            const day = parseInt(dateParts[2], 10);
+            countByDay[day] = (countByDay[day] || 0) + 1;
+          }
+        });
+        setSalesCountByDay(countByDay);
+      }
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {
@@ -146,6 +186,43 @@ export default function SalesScreen() {
     setRefreshing(true);
     loadData();
   }, [user]);
+
+  const goToPreviousMonth = () => {
+    if (selectedMonth === 0) {
+      setSelectedMonth(11);
+      setSelectedYear(selectedYear - 1);
+    } else {
+      setSelectedMonth(selectedMonth - 1);
+    }
+    setSelectedDay(null);
+  };
+
+  const goToNextMonth = () => {
+    const today = new Date();
+    const nextMonth = selectedMonth === 11 ? 0 : selectedMonth + 1;
+    const nextYear = selectedMonth === 11 ? selectedYear + 1 : selectedYear;
+
+    // Don't allow navigating to future months
+    if (nextYear > today.getFullYear() ||
+        (nextYear === today.getFullYear() && nextMonth > today.getMonth())) {
+      return;
+    }
+
+    if (selectedMonth === 11) {
+      setSelectedMonth(0);
+      setSelectedYear(selectedYear + 1);
+    } else {
+      setSelectedMonth(selectedMonth + 1);
+    }
+    setSelectedDay(null);
+  };
+
+  const goToCurrentMonth = () => {
+    const today = new Date();
+    setSelectedMonth(today.getMonth());
+    setSelectedYear(today.getFullYear());
+    setSelectedDay(null);
+  };
 
   const handleAddSale = async () => {
     if (!user || !newSale.product_id || !newSale.quantity) {
@@ -176,11 +253,16 @@ export default function SalesScreen() {
         notes: newSale.notes,
       };
 
-      // If admin mode and custom date/time provided, use them
-      if (profile?.admin_mode && customDate) {
-        saleData.sale_date = customDate;
-        if (customTime) {
-          saleData.sale_time = customTime;
+      // If admin mode: use custom date if provided, OR use selected day from calendar
+      if (profile?.current_role === 'admin') {
+        if (customDate) {
+          saleData.sale_date = customDate;
+          if (customTime) {
+            saleData.sale_time = customTime;
+          }
+        } else if (filterMode === 'month' && selectedDay !== null) {
+          // Use the selected day from the calendar - format without timezone issues
+          saleData.sale_date = `${selectedYear}-${String(selectedMonth + 1).padStart(2, '0')}-${String(selectedDay).padStart(2, '0')}`;
         }
       }
 
@@ -207,11 +289,11 @@ export default function SalesScreen() {
     saleDate.setHours(0, 0, 0, 0);
     
     const isToday = saleDate.getTime() === today.getTime();
-    
-    if (!isToday && !profile?.admin_mode) {
+
+    if (!isToday && profile?.current_role !== 'admin') {
       Alert.alert(
-        'Admin Mode Required',
-        'Enable Admin Mode in App Preferences to edit sales from previous dates',
+        'Admin Access Required',
+        'Only admins can edit sales from previous dates',
         [{ text: 'OK' }]
       );
       return;
@@ -293,11 +375,11 @@ export default function SalesScreen() {
     saleDate.setHours(0, 0, 0, 0);
     
     const isToday = saleDate.getTime() === today.getTime();
-    
-    if (!isToday && !profile?.admin_mode) {
+
+    if (!isToday && profile?.current_role !== 'admin') {
       Alert.alert(
-        'Admin Mode Required',
-        'Enable Admin Mode in App Preferences to delete sales from previous dates',
+        'Admin Access Required',
+        'Only admins can delete sales from previous dates',
         [{ text: 'OK' }]
       );
       return;
@@ -345,13 +427,13 @@ export default function SalesScreen() {
   const todayItems = sales.reduce((sum, sale) => sum + sale.quantity, 0);
 
   // Check if we're viewing today's data
-  const isViewingToday = filterMode === 'today' || 
-    (filterMode === 'month' && selectedDay !== null && 
+  const isViewingToday = filterMode === 'today' ||
+    (filterMode === 'month' && selectedDay !== null &&
      new Date(selectedYear, selectedMonth, selectedDay).toDateString() === new Date().toDateString());
-  
-  // Can add/edit if viewing today OR admin mode is enabled
-  // For month/year views without specific day, allow if admin mode is on
-  const canAddOrEdit = isViewingToday || Boolean(profile?.admin_mode);
+
+  // Can add/edit if viewing today OR user is admin (can edit old sales)
+  // Admins can add/edit historical sales from any view
+  const canAddOrEdit = isViewingToday || (profile?.current_role === 'admin');
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -393,19 +475,12 @@ export default function SalesScreen() {
             <TouchableOpacity
               style={[styles.filterTab, filterMode === 'month' && styles.filterTabActive]}
               onPress={() => {
-                if (filterMode === 'month' && selectedDay === null) {
-                  setShowDatePicker(true);
-                } else {
-                  setFilterMode('month');
-                  setSelectedDay(null);
-                  if (filterMode !== 'month') {
-                    setShowDatePicker(true);
-                  }
-                }
+                setFilterMode('month');
+                setSelectedDay(null);
               }}>
               <Calendar size={16} color={filterMode === 'month' ? '#FFFFFF' : '#6B5439'} />
               <Text style={[styles.filterTabText, filterMode === 'month' && styles.filterTabTextActive]}>
-                {filterMode === 'month' && selectedDay !== null ? 'Back to Month' : 'Month'}
+                Month
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -419,6 +494,94 @@ export default function SalesScreen() {
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Month Calendar View */}
+        {filterMode === 'month' && (
+          <View style={styles.calendarContainer}>
+            <View style={styles.calendarHeader}>
+              <TouchableOpacity style={styles.monthNavButton} onPress={goToPreviousMonth}>
+                <ChevronLeft size={24} color="#8B6F47" />
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={() => setShowMonthYearPicker(true)}>
+                <Text style={styles.calendarMonthTitle}>
+                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][selectedMonth]} {selectedYear}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.monthNavButton}
+                onPress={goToNextMonth}
+                disabled={selectedYear === new Date().getFullYear() && selectedMonth === new Date().getMonth()}>
+                <ChevronRight
+                  size={24}
+                  color={selectedYear === new Date().getFullYear() && selectedMonth === new Date().getMonth() ? '#D4BA9C' : '#8B6F47'}
+                />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.weekDaysRow}>
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+                <Text key={day} style={styles.weekDayText}>{day}</Text>
+              ))}
+            </View>
+
+            <View style={styles.calendarGrid}>
+              {getDaysInMonth(selectedYear, selectedMonth).map((day, index) => {
+                if (day === null) {
+                  return <View key={`empty-${index}`} style={styles.calendarDay} />;
+                }
+
+                const date = new Date(selectedYear, selectedMonth, day);
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const isToday = date.toDateString() === today.toDateString();
+                const isFuture = date > today;
+                const hasSales = salesCountByDay[day] > 0;
+                const isSelected = selectedDay === day;
+
+                return (
+                  <TouchableOpacity
+                    key={`day-${index}`}
+                    style={[
+                      styles.calendarDay,
+                      isToday && styles.calendarDayToday,
+                      isFuture && styles.calendarDayDisabled,
+                      isSelected && styles.calendarDaySelected,
+                    ]}
+                    onPress={() => {
+                      if (!isFuture) {
+                        setSelectedDay(selectedDay === day ? null : day);
+                      }
+                    }}
+                    disabled={isFuture}>
+                    <Text style={[
+                      styles.calendarDayText,
+                      isToday && styles.calendarDayTextToday,
+                      isFuture && styles.calendarDayTextDisabled,
+                      isSelected && styles.calendarDayTextSelected,
+                    ]}>
+                      {day}
+                    </Text>
+                    {hasSales && !isFuture && (
+                      <View style={styles.salesDot} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {selectedDay === null ? (
+              <Text style={styles.calendarHint}>Tap on a day to view sales details</Text>
+            ) : (
+              <TouchableOpacity
+                style={styles.clearSelectionButton}
+                onPress={() => setSelectedDay(null)}>
+                <Text style={styles.clearSelectionText}>Clear selection - View all month</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         <View style={styles.statsContainer}>
           <View style={styles.statCard}>
@@ -436,18 +599,24 @@ export default function SalesScreen() {
             <ShoppingBag size={48} color="#9ca3af" />
             <Text style={styles.emptyTitle}>
               {filterMode === 'today' && 'No Sales Today'}
-              {filterMode === 'month' && 'No Sales This Month'}
+              {filterMode === 'month' && selectedDay !== null && `No Sales on ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][selectedMonth]} ${selectedDay}`}
+              {filterMode === 'month' && selectedDay === null && 'No Sales This Month'}
               {filterMode === 'year' && 'No Sales This Year'}
             </Text>
             <Text style={styles.emptyText}>
               {filterMode === 'today' && 'Record your first sale to start tracking'}
-              {filterMode === 'month' && 'No sales recorded for this month'}
+              {filterMode === 'month' && selectedDay !== null && 'No sales recorded for this day'}
+              {filterMode === 'month' && selectedDay === null && 'No sales recorded for this month'}
               {filterMode === 'year' && 'No sales recorded for this year'}
             </Text>
           </View>
         ) : (
           <View style={styles.salesList}>
-            <Text style={styles.sectionTitle}>Recent Transactions</Text>
+            <Text style={styles.sectionTitle}>
+              {filterMode === 'month' && selectedDay !== null
+                ? `Sales on ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][selectedMonth]} ${selectedDay}, ${selectedYear}`
+                : 'Recent Transactions'}
+            </Text>
             {sales.map((sale) => {
               // Check if this specific sale can be edited
               const saleDate = new Date(sale.sale_date);
@@ -455,7 +624,7 @@ export default function SalesScreen() {
               today.setHours(0, 0, 0, 0);
               saleDate.setHours(0, 0, 0, 0);
               const isToday = saleDate.getTime() === today.getTime();
-              const canEdit = isToday || profile?.admin_mode;
+              const canEdit = isToday || (profile?.current_role === 'admin');
 
               const renderRightActions = (progress: Animated.AnimatedInterpolation<number>, dragX: Animated.AnimatedInterpolation<number>) => {
                 const trans = dragX.interpolate({
@@ -488,7 +657,7 @@ export default function SalesScreen() {
               return (
                 <Swipeable
                   key={sale.id}
-                  ref={(ref) => (swipeableRefs.current[sale.id] = ref)}
+                  ref={(ref) => { swipeableRefs.current[sale.id] = ref; }}
                   renderRightActions={editMode && canEdit ? renderRightActions : undefined}
                   enabled={editMode && canEdit}
                   friction={2}
@@ -501,7 +670,7 @@ export default function SalesScreen() {
                     <View style={styles.saleInfo}>
                       <Text style={styles.saleName}>{sale.product?.name}</Text>
                       <Text style={styles.saleDetails}>
-                        {sale.quantity}{' × '}{currencySymbol}{Number(sale.unit_price).toFixed(2)}
+                        {`${sale.quantity} × ${currencySymbol}${Number(sale.unit_price).toFixed(2)}`}
                       </Text>
                       <Text style={styles.saleTime}>
                         {formatTime12Hour(sale.sale_time)}
@@ -531,6 +700,79 @@ export default function SalesScreen() {
         </TouchableOpacity>
       )}
 
+      {/* Month/Year Picker Modal for Calendar */}
+      <Modal
+        visible={showMonthYearPicker}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowMonthYearPicker(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowMonthYearPicker(false)}>
+          <View style={styles.datePickerOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.datePickerContent}>
+                <Text style={styles.datePickerTitle}>Select Month & Year</Text>
+
+                <View style={styles.monthYearPickerContainer}>
+                  <Text style={styles.pickerSectionTitle}>Year</Text>
+                  <ScrollView style={styles.yearListCompact} horizontal showsHorizontalScrollIndicator={false}>
+                    {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - i).map((year) => (
+                      <TouchableOpacity
+                        key={year}
+                        style={[styles.yearChip, selectedYear === year && styles.yearChipActive]}
+                        onPress={() => setSelectedYear(year)}>
+                        <Text style={[styles.yearChipText, selectedYear === year && styles.yearChipTextActive]}>
+                          {year}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+
+                  <Text style={styles.pickerSectionTitle}>Month</Text>
+                  <View style={styles.monthGrid}>
+                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((month, index) => {
+                      const isFutureMonth = selectedYear === new Date().getFullYear() && index > new Date().getMonth();
+                      return (
+                        <TouchableOpacity
+                          key={index}
+                          style={[
+                            styles.monthButton,
+                            selectedMonth === index && styles.monthButtonActive,
+                            isFutureMonth && styles.monthButtonDisabled,
+                          ]}
+                          onPress={() => {
+                            if (!isFutureMonth) {
+                              setSelectedMonth(index);
+                              setSelectedDay(null);
+                              setShowMonthYearPicker(false);
+                            }
+                          }}
+                          disabled={isFutureMonth}>
+                          <Text style={[
+                            styles.monthButtonText,
+                            selectedMonth === index && styles.monthButtonTextActive,
+                            isFutureMonth && styles.monthButtonTextDisabled,
+                          ]}>
+                            {month}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+
+                <View style={styles.pickerActions}>
+                  <TouchableOpacity
+                    style={[styles.pickerActionButton, styles.pickerActionButtonPrimary]}
+                    onPress={() => setShowMonthYearPicker(false)}>
+                    <Text style={[styles.pickerActionText, styles.pickerActionTextPrimary]}>Done</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
+
       {/* Date Picker Modal */}
       <Modal
         visible={showDatePicker}
@@ -541,28 +783,7 @@ export default function SalesScreen() {
           <View style={styles.datePickerOverlay}>
             <TouchableWithoutFeedback>
               <View style={styles.datePickerContent}>
-                <Text style={styles.datePickerTitle}>
-                  {filterMode === 'month' ? 'Select Month' : 'Select Year'}
-                </Text>
-
-                {filterMode === 'month' && (
-                  <View style={styles.monthGrid}>
-                    {['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((month, index) => (
-                      <TouchableOpacity
-                        key={index}
-                        style={[styles.monthButton, selectedMonth === index && styles.monthButtonActive]}
-                        onPress={() => {
-                          setSelectedMonth(index);
-                          setShowDatePicker(false);
-                          setShowDayPicker(true);
-                        }}>
-                        <Text style={[styles.monthButtonText, selectedMonth === index && styles.monthButtonTextActive]}>
-                          {month}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
+                <Text style={styles.datePickerTitle}>Select Year</Text>
 
                 {filterMode === 'year' && (
                   <ScrollView style={styles.yearList}>
@@ -593,66 +814,6 @@ export default function SalesScreen() {
         </TouchableWithoutFeedback>
       </Modal>
 
-      {/* Day Picker Modal */}
-      <Modal
-        visible={showDayPicker}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowDayPicker(false)}>
-        <TouchableWithoutFeedback onPress={() => setShowDayPicker(false)}>
-          <View style={styles.datePickerOverlay}>
-            <TouchableWithoutFeedback>
-              <View style={styles.datePickerContent}>
-                <Text style={styles.datePickerTitle}>
-                  {['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][selectedMonth]} {selectedYear}
-                </Text>
-
-                <View style={styles.dayGrid}>
-                  {Array.from({ length: new Date(selectedYear, selectedMonth + 1, 0).getDate() }, (_, i) => i + 1).map((day) => {
-                    const date = new Date(selectedYear, selectedMonth, day);
-                    const today = new Date();
-                    const isToday = date.toDateString() === today.toDateString();
-                    const isFuture = date > today;
-                    
-                    return (
-                      <TouchableOpacity
-                        key={day}
-                        style={[
-                          styles.dayButton,
-                          selectedDay === day && styles.dayButtonActive,
-                          isFuture && styles.dayButtonDisabled,
-                        ]}
-                        onPress={() => {
-                          if (!isFuture) {
-                            setSelectedDay(day);
-                            setShowDayPicker(false);
-                          }
-                        }}
-                        disabled={isFuture}>
-                        <Text style={[
-                          styles.dayButtonText,
-                          selectedDay === day && styles.dayButtonTextActive,
-                          isToday && styles.dayButtonTextToday,
-                          isFuture && styles.dayButtonTextDisabled,
-                        ]}>
-                          {day}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                <TouchableOpacity
-                  style={styles.datePickerClose}
-                  onPress={() => setShowDayPicker(false)}>
-                  <Text style={styles.datePickerCloseText}>Close</Text>
-                </TouchableOpacity>
-              </View>
-            </TouchableWithoutFeedback>
-          </View>
-        </TouchableWithoutFeedback>
-      </Modal>
-
       <Modal
         visible={addSaleModalVisible}
         animationType="slide"
@@ -666,6 +827,15 @@ export default function SalesScreen() {
           <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Record Sale</Text>
+              
+              {/* Show which date the sale will be recorded for */}
+              {profile?.current_role === 'admin' && filterMode === 'month' && selectedDay !== null && !showCustomDateInput && (
+                <View style={styles.saleDateInfo}>
+                  <Text style={styles.saleDateInfoText}>
+                    {`Sale will be recorded for: ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][selectedMonth]} ${selectedDay}, ${selectedYear}`}
+                  </Text>
+                </View>
+              )}
               
               <ScrollView 
                 style={styles.modalScroll}
@@ -696,13 +866,13 @@ export default function SalesScreen() {
                                   styles.productOptionName,
                                   newSale.product_id === product.id && styles.productOptionNameSelected,
                                 ]}>
-                                {product.name}
+                                {product.name || 'Unnamed Product'}
                               </Text>
                               <Text style={styles.productOptionPrice}>
-                                {currencySymbol}{Number(product.price).toFixed(2)}{' per '}{product.unit}
+                                {`${currencySymbol}${Number(product.price || 0).toFixed(2)} per ${product.unit || 'unit'}`}
                               </Text>
                               <Text style={styles.productStockInfo}>
-                                {'Stock: '}{inventory.find(i => i.product_id === product.id)?.quantity || 0}{' '}{product.unit}
+                                {`Stock: ${inventory.find(i => i.product_id === product.id)?.quantity || 0} ${product.unit || 'unit'}`}
                               </Text>
                             </View>
                             {newSale.product_id === product.id && (
@@ -720,12 +890,12 @@ export default function SalesScreen() {
                     <View>
                       <Text style={styles.selectedProductLabel}>Selected:</Text>
                       <Text style={styles.selectedProductText}>
-                        {selectedProduct.name}{' - '}{currencySymbol}{Number(selectedProduct.price).toFixed(2)}
+                        {`${selectedProduct.name || 'Product'} - ${currencySymbol}${Number(selectedProduct.price || 0).toFixed(2)}`}
                       </Text>
                     </View>
                     <View style={styles.stockBadge}>
                       <Text style={styles.stockBadgeText}>
-                        {inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0}{' in stock'}
+                        {`${inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0} in stock`}
                       </Text>
                     </View>
                   </View>
@@ -768,7 +938,7 @@ export default function SalesScreen() {
                   </View>
                   {selectedProduct && (
                     <Text style={styles.quantityHelperText}>
-                      {'Max: '}{inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0}{' '}{selectedProduct.unit}
+                      {`Max: ${inventory.find(i => i.product_id === selectedProduct.id)?.quantity || 0} ${selectedProduct.unit || 'unit'}`}
                     </Text>
                   )}
                 </View>
@@ -777,15 +947,15 @@ export default function SalesScreen() {
                   <View style={styles.totalPreview}>
                     <Text style={styles.totalLabel}>Total Amount:</Text>
                     <Text style={styles.totalValue}>
-                      {currencySymbol}{(parseInt(newSale.quantity) * selectedProduct.price).toFixed(2)}
+                      {currencySymbol}{(parseInt(newSale.quantity) * (selectedProduct.price || 0)).toFixed(2)}
                     </Text>
                   </View>
                 )}
 
-                {profile?.admin_mode && (
+                {profile?.current_role === 'admin' && (
                   <View style={styles.inputGroup}>
                     <View style={styles.adminModeHeader}>
-                      <Text style={styles.adminModeLabel}>Admin Mode: Custom Date/Time</Text>
+                      <Text style={styles.adminModeLabel}>Admin: Custom Date/Time</Text>
                       <Switch
                         value={showCustomDateInput}
                         onValueChange={setShowCustomDateInput}
@@ -901,10 +1071,10 @@ export default function SalesScreen() {
                               {product.name}
                             </Text>
                             <Text style={styles.productOptionPrice}>
-                              {currencySymbol}{Number(product.price).toFixed(2)}{' per '}{product.unit}
+                              {`${currencySymbol}${Number(product.price).toFixed(2)} per ${product.unit}`}
                             </Text>
                             <Text style={styles.productStockInfo}>
-                              {'Stock: '}{inventory.find(i => i.product_id === product.id)?.quantity || 0}{' '}{product.unit}
+                              {`Stock: ${inventory.find(i => i.product_id === product.id)?.quantity || 0} ${product.unit}`}
                             </Text>
                           </View>
                           {editSale.product_id === product.id && (
@@ -921,12 +1091,12 @@ export default function SalesScreen() {
                     <View>
                       <Text style={styles.selectedProductLabel}>Selected:</Text>
                       <Text style={styles.selectedProductText}>
-                        {editSelectedProduct.name}{' - '}{currencySymbol}{Number(editSelectedProduct.price).toFixed(2)}
+                        {`${editSelectedProduct.name} - ${currencySymbol}${Number(editSelectedProduct.price).toFixed(2)}`}
                       </Text>
                     </View>
                     <View style={styles.stockBadge}>
                       <Text style={styles.stockBadgeText}>
-                        {inventory.find(i => i.product_id === editSelectedProduct.id)?.quantity || 0}{' in stock'}
+                        {`${inventory.find(i => i.product_id === editSelectedProduct.id)?.quantity || 0} in stock`}
                       </Text>
                     </View>
                   </View>
@@ -1340,6 +1510,19 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginBottom: 20,
   },
+  saleDateInfo: {
+    backgroundColor: '#FEF3C7',
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#F59E0B',
+  },
+  saleDateInfoText: {
+    fontSize: 14,
+    color: '#92400E',
+    fontWeight: '500',
+  },
   modalScroll: {
     flexGrow: 0,
   },
@@ -1644,5 +1827,183 @@ const styles = StyleSheet.create({
   },
   modalScrollEdit: {
     maxHeight: '70%',
+  },
+  calendarContainer: {
+    backgroundColor: '#FFFFFF',
+    marginHorizontal: 16,
+    marginTop: 16,
+    marginBottom: 12,
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E8DCC8',
+  },
+  monthNavButton: {
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: '#F5E6D3',
+  },
+  calendarMonthTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#6B5439',
+  },
+  weekDaysRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  weekDayText: {
+    flex: 1,
+    textAlign: 'center',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#8B7355',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDay: {
+    width: '14.28%',
+    height: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  calendarDayToday: {
+    backgroundColor: '#F5E6D3',
+    borderRadius: 12,
+  },
+  calendarDayDisabled: {
+    opacity: 0.3,
+  },
+  calendarDayText: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#3a3a3a',
+  },
+  calendarDayTextToday: {
+    color: '#8B6F47',
+    fontWeight: '700',
+  },
+  calendarDayTextDisabled: {
+    color: '#A89176',
+  },
+  salesDot: {
+    position: 'absolute',
+    bottom: 4,
+    backgroundColor: '#DC6B19',
+    borderRadius: 4,
+    width: 8,
+    height: 8,
+  },
+  calendarHint: {
+    textAlign: 'center',
+    fontSize: 12,
+    color: '#8B7355',
+    marginTop: 12,
+    fontStyle: 'italic',
+  },
+  calendarDaySelected: {
+    backgroundColor: '#8B6F47',
+    borderRadius: 12,
+  },
+  calendarDayTextSelected: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+  },
+  clearSelectionButton: {
+    marginTop: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    backgroundColor: '#F5E6D3',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  clearSelectionText: {
+    fontSize: 13,
+    color: '#8B6F47',
+    fontWeight: '600',
+  },
+  monthYearPickerContainer: {
+    width: '100%',
+    marginBottom: 20,
+  },
+  pickerSectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B5439',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  yearListCompact: {
+    maxHeight: 50,
+    marginBottom: 8,
+  },
+  yearChip: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    marginRight: 8,
+    backgroundColor: '#F5E6D3',
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#D4BA9C',
+  },
+  yearChipActive: {
+    backgroundColor: '#8B6F47',
+    borderColor: '#8B6F47',
+  },
+  yearChipText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B5439',
+  },
+  yearChipTextActive: {
+    color: '#FFFFFF',
+  },
+  monthButtonDisabled: {
+    opacity: 0.3,
+  },
+  monthButtonTextDisabled: {
+    color: '#A89176',
+  },
+  pickerActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  pickerActionButton: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#F5E6D3',
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#D4BA9C',
+  },
+  pickerActionButtonPrimary: {
+    backgroundColor: '#8B6F47',
+    borderColor: '#8B6F47',
+  },
+  pickerActionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B5439',
+  },
+  pickerActionTextPrimary: {
+    color: '#FFFFFF',
   },
 });

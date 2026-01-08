@@ -1,20 +1,11 @@
-import { getDatabase, generateId } from '@/lib/database';
-import { Sale, SaleWithProduct } from '@/types/database';
-import { InventoryService } from './inventory.service.sqlite';
+/**
+ * Sales Service
+ * Handles all sales-related database operations
+ */
 
-function formatDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function formatTime(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  return `${hours}:${minutes}:${seconds}`;
-}
+import { getDatabase, generateId } from '@/features/shared/database';
+import { Sale, SaleWithProduct } from '@/features/shared/types';
+import { formatDate, formatTime } from '@/features/shared/utils';
 
 export class SalesService {
   static async getSales(userId: string, startDate?: string, endDate?: string): Promise<SaleWithProduct[]> {
@@ -102,6 +93,8 @@ export class SalesService {
     ]);
 
     // Update inventory - reduce quantity
+    const InventoryModule = await import('@/features/inventory');
+    const { InventoryService } = InventoryModule;
     await InventoryService.adjustInventory(userId, sale.product_id, -sale.quantity);
 
     const result = await db.getFirstAsync<Sale>(
@@ -115,7 +108,6 @@ export class SalesService {
   static async updateSale(id: string, updates: Partial<Sale>) {
     const db = await getDatabase();
 
-    // Get current sale to check for quantity changes
     const currentSale = await db.getFirstAsync<Sale>(
       'SELECT * FROM sales WHERE id = ? LIMIT 1',
       [id]
@@ -149,7 +141,6 @@ export class SalesService {
       values.push(updates.sale_time);
     }
 
-    // Recalculate total if quantity or price changed
     if (updates.quantity !== undefined || updates.unit_price !== undefined) {
       const newQuantity = updates.quantity ?? currentSale.quantity;
       const newPrice = updates.unit_price ?? currentSale.unit_price;
@@ -167,11 +158,10 @@ export class SalesService {
     const query = `UPDATE sales SET ${fields.join(', ')} WHERE id = ?`;
     await db.runAsync(query, values);
 
-    // Adjust inventory if quantity changed
     if (updates.quantity !== undefined && updates.quantity !== currentSale.quantity) {
+      const InventoryModule = await import('@/features/inventory');
+      const { InventoryService } = InventoryModule;
       const quantityDifference = currentSale.quantity - updates.quantity;
-      // If new quantity is less, we sold less, so add back to inventory
-      // If new quantity is more, we sold more, so remove from inventory
       await InventoryService.adjustInventory(
         currentSale.user_id,
         currentSale.product_id,
@@ -185,14 +175,14 @@ export class SalesService {
   static async deleteSale(id: string) {
     const db = await getDatabase();
 
-    // Get sale info before deleting to restore inventory
     const sale = await db.getFirstAsync<Sale>(
       'SELECT * FROM sales WHERE id = ? LIMIT 1',
       [id]
     );
 
     if (sale) {
-      // Restore inventory
+      const InventoryModule = await import('@/features/inventory');
+      const { InventoryService } = InventoryModule;
       await InventoryService.adjustInventory(sale.user_id, sale.product_id, sale.quantity);
     }
 
@@ -294,8 +284,8 @@ export class SalesService {
 
     const results = await db.getAllAsync<any>(query, [
       userId,
-      this.formatDate(startDate),
-      this.formatDate(endDate)
+      formatDate(startDate),
+      formatDate(endDate)
     ]);
     return results;
   }
@@ -304,7 +294,7 @@ export class SalesService {
     const db = await getDatabase();
     const endDate = new Date();
     const startDate = new Date();
-    startDate.setDate(startDate.getDate() - (days * 2)); // Get double the period for comparison
+    startDate.setDate(startDate.getDate() - (days * 2));
 
     const query = `
       SELECT
@@ -319,8 +309,8 @@ export class SalesService {
     const results = await db.getAllAsync<any>(query, [
       userId,
       productId,
-      this.formatDate(startDate),
-      this.formatDate(endDate)
+      formatDate(startDate),
+      formatDate(endDate)
     ]);
 
     if (results.length < days) return null;
@@ -368,12 +358,5 @@ export class SalesService {
 
     const results = await db.getAllAsync<any>(query, [userId, userId]);
     return results;
-  }
-
-  private static formatDate(date: Date): string {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
   }
 }

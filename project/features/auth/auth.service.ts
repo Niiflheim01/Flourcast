@@ -1,3 +1,8 @@
+/**
+ * Firebase Authentication Service
+ * Handles sign in, sign up, sign out, and password reset
+ */
+
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
@@ -6,16 +11,15 @@ import {
   onAuthStateChanged,
   User
 } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { auth } from './firebase';
 import { ProfileService } from './profile.service';
 
-export class FirebaseAuthService {
+export class AuthService {
   static async signUp(email: string, password: string, bakeryName: string) {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Create local profile in SQLite
       if (user) {
         await ProfileService.createProfile({
           id: user.uid,
@@ -39,11 +43,9 @@ export class FirebaseAuthService {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Load or create local profile
       if (user) {
         let profile = await ProfileService.getProfile(user.uid);
         if (!profile) {
-          // Create profile if it doesn't exist locally
           await ProfileService.createProfile({
             id: user.uid,
             email: user.email || email,

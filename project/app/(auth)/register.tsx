@@ -12,7 +12,7 @@ import {
   Image,
 } from 'react-native';
 import { Link, router } from 'expo-router';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/features/auth';
 import { Asset } from 'expo-asset';
 
 const logoImage = require('@/assets/images/logo.png');

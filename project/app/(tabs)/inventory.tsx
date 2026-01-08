@@ -17,23 +17,21 @@ import {
   SafeAreaView,
   Animated,
 } from 'react-native';
-import { useAuth } from '@/contexts/AuthContext';
-import { ProductService } from '@/services/product.service.sqlite';
-import { InventoryService } from '@/services/inventory.service.sqlite';
-import { Product, InventoryWithProduct } from '@/types/database';
+import { useAuth } from '@/features/auth';
+import { ProductService, InventoryService } from '@/features/inventory';
+import { Product, InventoryWithProduct, getCurrencySymbol, getPermissions } from '@/features/shared';
 import { Plus, Package, AlertTriangle, Edit, Minus, LayoutGrid, List, Image as ImageIcon, Calculator, ChefHat } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ImagePickerButton from '@/components/ImagePickerButton';
 import CostCalculator from '@/components/CostCalculator';
 import RecipeManager from '@/components/RecipeManager';
 import { Image } from 'react-native';
-import { getCurrencySymbol } from '@/lib/currency';
-import { searchProductImages, downloadImage } from '@/lib/auto-image';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function InventoryScreen() {
   const { user, profile } = useAuth();
   const currencySymbol = getCurrencySymbol(profile?.currency || 'PHP');
+  const permissions = getPermissions(profile?.current_role || 'admin');
   const [inventory, setInventory] = useState<InventoryWithProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -45,7 +43,7 @@ export default function InventoryScreen() {
     name: '',
     price: '',
     cost: '',
-    unit: 'piece',
+    unit: 'pcs',
     initialStock: '',
     productType: 'product' as 'product' | 'ingredient',
     imageUri: null as string | null,
@@ -55,7 +53,7 @@ export default function InventoryScreen() {
     name: '',
     price: '',
     cost: '',
-    unit: 'piece',
+    unit: 'pcs',
     productType: 'product' as 'product' | 'ingredient',
     imageUri: null as string | null,
     currentStock: '',
@@ -75,10 +73,6 @@ export default function InventoryScreen() {
   const [showEditUnitPicker, setShowEditUnitPicker] = useState(false);
   const [showEditCustomUnit, setShowEditCustomUnit] = useState(false);
   const [productTypeFilter, setProductTypeFilter] = useState<'all' | 'product' | 'ingredient'>('all');
-  const [searchingImage, setSearchingImage] = useState(false);
-  const [imageGalleryVisible, setImageGalleryVisible] = useState(false);
-  const [galleryImages, setGalleryImages] = useState<Array<{url: string, photographer: string}>>([]);
-  const [imageSearchKeyword, setImageSearchKeyword] = useState('');
   const [isEditMode, setIsEditMode] = useState(false);
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
   const [actionSheetItem, setActionSheetItem] = useState<InventoryWithProduct | null>(null);
@@ -183,27 +177,13 @@ export default function InventoryScreen() {
     try {
       setLoading(true);
 
-      // Auto-fetch image for known products/ingredients if user didn't provide one
-      let finalImageUri = newProduct.imageUri;
-      try {
-        const autoImageUri = await autoFetchProductImage(newProduct.name, newProduct.imageUri);
-        if (autoImageUri) {
-          finalImageUri = autoImageUri;
-          const itemType = newProduct.productType === 'ingredient' ? 'ingredient' : 'product';
-          console.log(`Auto-fetched image for ${itemType}:`, newProduct.name);
-        }
-      } catch (error) {
-        // Don't fail product creation if image fetch fails
-        console.warn('Failed to auto-fetch image:', error);
-      }
-
       const product = await ProductService.createProduct(user.uid, {
         name: newProduct.name,
         price: parseFloat(newProduct.price) || 0,
         cost: parseFloat(newProduct.cost) || 0,
         unit: newProduct.unit,
         product_type: newProduct.productType,
-        image_url: finalImageUri,
+        image_url: newProduct.imageUri || undefined,
       });
 
       // Update initial stock if provided
@@ -217,14 +197,11 @@ export default function InventoryScreen() {
 
       Keyboard.dismiss();
       setAddProductModalVisible(false);
-      setNewProduct({ name: '', price: '', cost: '', unit: 'piece', initialStock: '', productType: 'product', imageUri: null });
+      setNewProduct({ name: '', price: '', cost: '', unit: 'pcs', initialStock: '', productType: 'product', imageUri: null });
       await loadInventory();
 
       const itemType = newProduct.productType === 'ingredient' ? 'Ingredient' : 'Product';
-      const successMessage = finalImageUri && !newProduct.imageUri
-        ? `${itemType} added with auto-fetched image!`
-        : `${itemType} added successfully`;
-      Alert.alert('Success', successMessage);
+      Alert.alert('Success', `${itemType} added successfully`);
     } catch (error: any) {
       Alert.alert('Error', error.message);
     } finally {
@@ -233,73 +210,19 @@ export default function InventoryScreen() {
   };
 
   const openEditProduct = (item: InventoryWithProduct) => {
+    if (!item.product) return;
     setEditProduct({
       id: item.product.id,
       name: item.product.name || '',
       price: item.product.price?.toString() || '',
       cost: item.product.cost?.toString() || '',
-      unit: item.product.unit || 'piece',
+      unit: item.product.unit || 'pcs',
       productType: (item.product.product_type || 'product') as 'product' | 'ingredient',
       imageUri: item.product.image_url || null,
       currentStock: item.quantity?.toString() || '0',
       inventoryId: item.id,
     });
     setEditProductModalVisible(true);
-  };
-
-  const handleSearchImage = (productName: string, isEdit: boolean = false) => {
-    if (!productName.trim()) {
-      Alert.alert('Error', 'Please enter a product name first');
-      return;
-    }
-    setImageSearchKeyword(productName);
-    setIsEditMode(isEdit);
-    setImageGalleryVisible(true);
-  };
-
-  const searchImages = async () => {
-    if (!imageSearchKeyword.trim()) {
-      Alert.alert('Error', 'Please enter a search keyword');
-      return;
-    }
-
-    setSearchingImage(true);
-    try {
-      const images = await searchProductImages(imageSearchKeyword);
-      if (images.length > 0) {
-        setGalleryImages(images);
-      } else {
-        Alert.alert('No Images Found', 'Try a different search term');
-      }
-    } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to search for images');
-    } finally {
-      setSearchingImage(false);
-    }
-  };
-
-  const selectImageFromGallery = async (imageUrl: string) => {
-    setSearchingImage(true);
-    try {
-      const localUri = await downloadImage(imageUrl);
-      if (localUri) {
-        if (isEditMode) {
-          setEditProduct({ ...editProduct, imageUri: localUri });
-        } else {
-          setNewProduct({ ...newProduct, imageUri: localUri });
-        }
-        setImageGalleryVisible(false);
-        setGalleryImages([]);
-        setImageSearchKeyword('');
-        Alert.alert('Success', 'Image added!');
-      } else {
-        Alert.alert('Error', 'Failed to download image');
-      }
-    } catch (error: any) {
-      Alert.alert('Error', error.message || 'Failed to download image');
-    } finally {
-      setSearchingImage(false);
-    }
   };
 
   const handleDeleteProduct = async () => {
@@ -333,25 +256,34 @@ export default function InventoryScreen() {
     }
 
     try {
-      // Update product details
-      await ProductService.updateProduct(editProduct.id, {
+      // Build update object based on permissions
+      const updates: any = {
         name: editProduct.name,
-        price: parseFloat(editProduct.price) || 0,
-        cost: parseFloat(editProduct.cost) || 0,
         unit: editProduct.unit,
         product_type: editProduct.productType,
         image_url: editProduct.imageUri,
-      });
+      };
 
-      // Update inventory stock if changed
-      if (editProduct.inventoryId && editProduct.currentStock !== undefined) {
+      // Only allow price/cost updates if user has permission
+      if (permissions.canEditPrices) {
+        updates.price = parseFloat(editProduct.price) || 0;
+      }
+      if (permissions.canEditCosts) {
+        updates.cost = parseFloat(editProduct.cost) || 0;
+      }
+
+      // Update product details
+      await ProductService.updateProduct(editProduct.id, updates);
+
+      // Update inventory stock if changed (admin only)
+      if (permissions.canUpdateInventory && editProduct.inventoryId && editProduct.currentStock !== undefined) {
         const newStock = parseFloat(editProduct.currentStock) || 0;
         await InventoryService.updateInventory(editProduct.inventoryId, newStock);
       }
 
       Keyboard.dismiss();
       setEditProductModalVisible(false);
-      setEditProduct({ id: '', name: '', price: '', cost: '', unit: 'piece', productType: 'product', imageUri: null, currentStock: '', inventoryId: '' });
+      setEditProduct({ id: '', name: '', price: '', cost: '', unit: 'pcs', productType: 'product', imageUri: null, currentStock: '', inventoryId: '' });
       await loadInventory();
       Alert.alert('Success', 'Product updated successfully');
     } catch (error: any) {
@@ -360,17 +292,21 @@ export default function InventoryScreen() {
   };
 
   const handleUpdateStock = async () => {
-    if (!selectedItem || !stockUpdate.quantity) return;
+    if (!permissions.canUpdateInventory) {
+      Alert.alert('Permission Denied', 'Only admins can manually update inventory. Inventory is automatically updated when sales are recorded.');
+      return;
+    }
 
-    const quantity = parseInt(stockUpdate.quantity);
-    let newQuantity = selectedItem.quantity;
+    if (!selectedItem || !stockUpdate.quantity) {
+      Alert.alert('Error', 'Please enter a quantity');
+      return;
+    }
 
-    if (stockUpdate.action === 'add') {
-      newQuantity += quantity;
-    } else if (stockUpdate.action === 'remove') {
-      newQuantity = Math.max(0, newQuantity - quantity);
-    } else {
-      newQuantity = quantity;
+    const newQuantity = parseInt(stockUpdate.quantity);
+
+    if (isNaN(newQuantity) || newQuantity < 0) {
+      Alert.alert('Error', 'Please enter a valid quantity');
+      return;
     }
 
     try {
@@ -387,6 +323,7 @@ export default function InventoryScreen() {
 
   const openUpdateStock = (item: InventoryWithProduct) => {
     setSelectedItem(item);
+    setStockUpdate({ quantity: item.quantity.toString(), action: 'add' });
     setUpdateStockModalVisible(true);
   };
 
@@ -401,6 +338,7 @@ export default function InventoryScreen() {
   const lowStockItems = inventory.filter(item => item.quantity <= item.min_threshold);
 
   const filteredInventory = inventory.filter(item => {
+    if (!item.product) return false;
     if (productTypeFilter === 'all') return true;
     return item.product.product_type === productTypeFilter;
   }).sort((a, b) => {
@@ -637,13 +575,15 @@ export default function InventoryScreen() {
         )}
       </ScrollView>
 
-      {/* Floating Action Button */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setAddProductModalVisible(true)}
-        activeOpacity={0.8}>
-        <Plus size={28} color="#FFFFFF" />
-      </TouchableOpacity>
+      {/* Floating Action Button - Admin Only */}
+      {permissions.canDeleteProducts && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => setAddProductModalVisible(true)}
+          activeOpacity={0.8}>
+          <Plus size={28} color="#FFFFFF" />
+        </TouchableOpacity>
+      )}
 
       <Modal
         visible={addProductModalVisible}
@@ -791,7 +731,7 @@ export default function InventoryScreen() {
                         style={styles.backToPickerButton}
                         onPress={() => {
                           setShowCustomUnit(false);
-                          setNewProduct({ ...newProduct, unit: 'piece' });
+                          setNewProduct({ ...newProduct, unit: 'pcs' });
                         }}>
                         <Text style={styles.backToPickerText}>Cancel</Text>
                       </TouchableOpacity>
@@ -864,7 +804,7 @@ export default function InventoryScreen() {
                     style={styles.cancelButton}
                     onPress={() => {
                       setAddProductModalVisible(false);
-                      setNewProduct({ name: '', price: '', cost: '', unit: 'piece', initialStock: '', productType: 'product', imageUri: null });
+                      setNewProduct({ name: '', price: '', cost: '', unit: 'pcs', initialStock: '', productType: 'product', imageUri: null });
                     }}
                     disabled={loading}>
                     <Text style={styles.cancelButtonText}>Cancel</Text>
@@ -920,37 +860,45 @@ export default function InventoryScreen() {
                 </View>
 
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Type *</Text>
-                  <View style={styles.typeSelector}>
-                    <TouchableOpacity
-                      style={[
-                        styles.typeButton,
-                        editProduct.productType === 'product' && styles.typeButtonActive,
-                      ]}
-                      onPress={() => setEditProduct({ ...editProduct, productType: 'product' })}>
-                      <Text
+                  <Text style={styles.inputLabel}>Type {permissions.canDeleteProducts ? '*' : '(View Only)'}</Text>
+                  {permissions.canDeleteProducts ? (
+                    <View style={styles.typeSelector}>
+                      <TouchableOpacity
                         style={[
-                          styles.typeButtonText,
-                          editProduct.productType === 'product' && styles.typeButtonTextActive,
-                        ]}>
-                        Product
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[
-                        styles.typeButton,
-                        editProduct.productType === 'ingredient' && styles.typeButtonActive,
-                      ]}
-                      onPress={() => setEditProduct({ ...editProduct, productType: 'ingredient', price: '0' })}>
-                      <Text
+                          styles.typeButton,
+                          editProduct.productType === 'product' && styles.typeButtonActive,
+                        ]}
+                        onPress={() => setEditProduct({ ...editProduct, productType: 'product' })}>
+                        <Text
+                          style={[
+                            styles.typeButtonText,
+                            editProduct.productType === 'product' && styles.typeButtonTextActive,
+                          ]}>
+                          Product
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
                         style={[
-                          styles.typeButtonText,
-                          editProduct.productType === 'ingredient' && styles.typeButtonTextActive,
-                        ]}>
-                        Ingredient
+                          styles.typeButton,
+                          editProduct.productType === 'ingredient' && styles.typeButtonActive,
+                        ]}
+                        onPress={() => setEditProduct({ ...editProduct, productType: 'ingredient', price: '0' })}>
+                        <Text
+                          style={[
+                            styles.typeButtonText,
+                            editProduct.productType === 'ingredient' && styles.typeButtonTextActive,
+                          ]}>
+                          Ingredient
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
+                      <Text style={{ fontSize: 16, color: '#6b7280' }}>
+                        {editProduct.productType === 'product' ? 'Product' : 'Ingredient'}
                       </Text>
-                    </TouchableOpacity>
-                  </View>
+                    </View>
+                  )}
                   <Text style={styles.helperText}>
                     {editProduct.productType === 'product'
                       ? 'Products can be sold to customers'
@@ -971,24 +919,34 @@ export default function InventoryScreen() {
 
                 {editProduct.productType === 'product' && (
                   <View style={styles.inputGroup}>
-                    <Text style={styles.inputLabel}>Selling Price ({currencySymbol}) *</Text>
-                    <TextInput
-                      style={styles.input}
-                      placeholder={`e.g., ${currencySymbol}5.00`}
-                      placeholderTextColor="#94a3b8"
-                      value={editProduct.price}
-                      onChangeText={(text) => setEditProduct({ ...editProduct, price: text })}
-                      keyboardType="decimal-pad"
-                    />
+                    <Text style={styles.inputLabel}>
+                      Selling Price ({currencySymbol}) {permissions.canEditPrices ? '*' : '(View Only)'}
+                    </Text>
+                    {permissions.canEditPrices ? (
+                      <TextInput
+                        style={styles.input}
+                        placeholder={`e.g., ${currencySymbol}5.00`}
+                        placeholderTextColor="#94a3b8"
+                        value={editProduct.price}
+                        onChangeText={(text) => setEditProduct({ ...editProduct, price: text })}
+                        keyboardType="decimal-pad"
+                      />
+                    ) : (
+                      <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
+                        <Text style={{ fontSize: 16, color: '#6b7280' }}>
+                          {currencySymbol}{editProduct.price || '0.00'}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 )}
 
                 <View style={styles.inputGroup}>
                   <View style={styles.labelWithAction}>
                     <Text style={styles.inputLabel}>
-                      {editProduct.productType === 'product' ? 'Cost Per Unit' : 'Purchase Price'} ({currencySymbol}) - Optional
+                      {editProduct.productType === 'product' ? 'Cost Per Unit' : 'Purchase Price'} ({currencySymbol}) - {permissions.canEditCosts ? 'Optional' : 'View Only'}
                     </Text>
-                    {editProduct.productType === 'product' && (
+                    {editProduct.productType === 'product' && permissions.canEditCosts && (
                       <TouchableOpacity
                         style={styles.calculateCostButton}
                         onPress={() => {
@@ -1001,116 +959,152 @@ export default function InventoryScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
-                  <TextInput
-                    style={styles.input}
-                    placeholder={`e.g., ${currencySymbol}3.00`}
-                    placeholderTextColor="#94a3b8"
-                    value={editProduct.cost}
-                    onChangeText={(text) => setEditProduct({ ...editProduct, cost: text })}
-                    keyboardType="decimal-pad"
-                  />
+                  {permissions.canEditCosts ? (
+                    <TextInput
+                      style={styles.input}
+                      placeholder={`e.g., ${currencySymbol}3.00`}
+                      placeholderTextColor="#94a3b8"
+                      value={editProduct.cost}
+                      onChangeText={(text) => setEditProduct({ ...editProduct, cost: text })}
+                      keyboardType="decimal-pad"
+                    />
+                  ) : (
+                    <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
+                      <Text style={{ fontSize: 16, color: '#6b7280' }}>
+                        {currencySymbol}{editProduct.cost || '0.00'}
+                      </Text>
+                    </View>
+                  )}
                   <Text style={styles.helperText}>
-                    {editProduct.productType === 'product'
-                      ? 'Optional: Your cost to make this item. Use calculator if needed.'
-                      : 'Optional: How much you pay when buying this ingredient'}
+                    {permissions.canEditCosts ? (
+                      editProduct.productType === 'product'
+                        ? 'Optional: Your cost to make this item. Use calculator if needed.'
+                        : 'Optional: How much you pay when buying this ingredient'
+                    ) : (
+                      'Staff cannot edit product costs'
+                    )}
                   </Text>
                 </View>
 
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Unit *</Text>
-                  {showEditCustomUnit ? (
-                    <View style={styles.customUnitContainer}>
-                      <TextInput
-                        style={[styles.input, styles.customUnitInput]}
-                        placeholder="Enter custom unit"
-                        placeholderTextColor="#94a3b8"
-                        value={editProduct.unit}
-                        onChangeText={(text) => setEditProduct({ ...editProduct, unit: text })}
-                        autoFocus
-                      />
-                      <TouchableOpacity
-                        style={styles.backToPickerButton}
-                        onPress={() => {
-                          setShowEditCustomUnit(false);
-                          setEditProduct({ ...editProduct, unit: 'piece' });
-                        }}>
-                        <Text style={styles.backToPickerText}>Cancel</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <>
-                      <TouchableOpacity
-                        style={styles.unitPickerButton}
-                        onPress={() => setShowEditUnitPicker(!showEditUnitPicker)}>
-                        <Text style={styles.unitPickerButtonText}>
-                          {editProduct.unit || 'Select unit'}
-                        </Text>
-                        <Text style={styles.unitPickerArrow}>▼</Text>
-                      </TouchableOpacity>
-                      {showEditUnitPicker && (
-                        <View style={styles.unitPickerDropdown}>
-                          <ScrollView style={styles.unitPickerScroll} nestedScrollEnabled>
-                            {commonUnits.map((unit) => (
-                              <TouchableOpacity
-                                key={unit}
-                                style={[
-                                  styles.unitOption,
-                                  editProduct.unit === unit && styles.unitOptionSelected,
-                                ]}
-                                onPress={() => {
-                                  if (unit === 'custom') {
-                                    setShowEditCustomUnit(true);
-                                    setShowEditUnitPicker(false);
-                                    setEditProduct({ ...editProduct, unit: '' });
-                                  } else {
-                                    setEditProduct({ ...editProduct, unit: unit });
-                                    setShowEditUnitPicker(false);
-                                  }
-                                }}>
-                                <Text
+                  <Text style={styles.inputLabel}>Unit {permissions.canDeleteProducts ? '*' : '(View Only)'}</Text>
+                  {permissions.canDeleteProducts ? (
+                    showEditCustomUnit ? (
+                      <View style={styles.customUnitContainer}>
+                        <TextInput
+                          style={[styles.input, styles.customUnitInput]}
+                          placeholder="Enter custom unit"
+                          placeholderTextColor="#94a3b8"
+                          value={editProduct.unit}
+                          onChangeText={(text) => setEditProduct({ ...editProduct, unit: text })}
+                          autoFocus
+                        />
+                        <TouchableOpacity
+                          style={styles.backToPickerButton}
+                          onPress={() => {
+                            setShowEditCustomUnit(false);
+                            setEditProduct({ ...editProduct, unit: 'pcs' });
+                          }}>
+                          <Text style={styles.backToPickerText}>Cancel</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <>
+                        <TouchableOpacity
+                          style={styles.unitPickerButton}
+                          onPress={() => setShowEditUnitPicker(!showEditUnitPicker)}>
+                          <Text style={styles.unitPickerButtonText}>
+                            {editProduct.unit || 'Select unit'}
+                          </Text>
+                          <Text style={styles.unitPickerArrow}>▼</Text>
+                        </TouchableOpacity>
+                        {showEditUnitPicker && (
+                          <View style={styles.unitPickerDropdown}>
+                            <ScrollView style={styles.unitPickerScroll} nestedScrollEnabled>
+                              {commonUnits.map((unit) => (
+                                <TouchableOpacity
+                                  key={unit}
                                   style={[
-                                    styles.unitOptionText,
-                                    editProduct.unit === unit && styles.unitOptionTextSelected,
-                                    unit === 'custom' && styles.customOptionText,
-                                  ]}>
-                                  {unit === 'custom' ? 'Custom Unit...' : unit}
-                                </Text>
-                              </TouchableOpacity>
-                            ))}
-                          </ScrollView>
-                        </View>
-                      )}
-                    </>
+                                    styles.unitOption,
+                                    editProduct.unit === unit && styles.unitOptionSelected,
+                                  ]}
+                                  onPress={() => {
+                                    if (unit === 'custom') {
+                                      setShowEditCustomUnit(true);
+                                      setShowEditUnitPicker(false);
+                                      setEditProduct({ ...editProduct, unit: '' });
+                                    } else {
+                                      setEditProduct({ ...editProduct, unit: unit });
+                                      setShowEditUnitPicker(false);
+                                    }
+                                  }}>
+                                  <Text
+                                    style={[
+                                      styles.unitOptionText,
+                                      editProduct.unit === unit && styles.unitOptionTextSelected,
+                                      unit === 'custom' && styles.customOptionText,
+                                    ]}>
+                                    {unit === 'custom' ? 'Custom Unit...' : unit}
+                                  </Text>
+                                </TouchableOpacity>
+                              ))}
+                            </ScrollView>
+                          </View>
+                        )}
+                      </>
+                    )
+                  ) : (
+                    <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
+                      <Text style={{ fontSize: 16, color: '#6b7280' }}>
+                        {editProduct.unit || 'pcs'}
+                      </Text>
+                    </View>
                   )}
                 </View>
 
-                <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Current Stock</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g., 25"
-                    placeholderTextColor="#94a3b8"
-                    value={editProduct.currentStock}
-                    onChangeText={(text) => setEditProduct({ ...editProduct, currentStock: text })}
-                    keyboardType="numeric"
-                  />
-                  <Text style={styles.helperText}>
-                    Update the quantity in stock
-                  </Text>
-                </View>
+                {permissions.canUpdateInventory ? (
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Current Stock</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="e.g., 25"
+                      placeholderTextColor="#94a3b8"
+                      value={editProduct.currentStock}
+                      onChangeText={(text) => setEditProduct({ ...editProduct, currentStock: text })}
+                      keyboardType="numeric"
+                    />
+                    <Text style={styles.helperText}>
+                      Update the quantity in stock
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={styles.inputGroup}>
+                    <Text style={styles.inputLabel}>Current Stock (View Only)</Text>
+                    <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
+                      <Text style={{ fontSize: 16, color: '#6b7280' }}>
+                        {editProduct.currentStock || '0'}
+                      </Text>
+                    </View>
+                    <Text style={styles.helperText}>
+                      Staff cannot manually update inventory. Stock is automatically updated when sales are recorded.
+                    </Text>
+                  </View>
+                )}
                 </ScrollView>
 
                 <View style={styles.modalButtonsFixed}>
-                  <TouchableOpacity
-                    style={styles.deleteButton}
-                    onPress={handleDeleteProduct}>
-                    <Text style={styles.deleteButtonText}>Delete</Text>
-                  </TouchableOpacity>
+                  {permissions.canDeleteProducts && (
+                    <TouchableOpacity
+                      style={styles.deleteButton}
+                      onPress={handleDeleteProduct}>
+                      <Text style={styles.deleteButtonText}>Delete</Text>
+                    </TouchableOpacity>
+                  )}
                   <TouchableOpacity
                     style={styles.cancelButton}
                     onPress={() => {
                       setEditProductModalVisible(false);
-                      setEditProduct({ id: '', name: '', price: '', cost: '', unit: 'piece', productType: 'product', imageUri: null, currentStock: '', inventoryId: '' });
+                      setEditProduct({ id: '', name: '', price: '', cost: '', unit: 'pcs', productType: 'product', imageUri: null, currentStock: '', inventoryId: '' });
                     }}>
                     <Text style={styles.cancelButtonText}>Cancel</Text>
                   </TouchableOpacity>
@@ -1138,34 +1132,36 @@ export default function InventoryScreen() {
                 <Text style={styles.modalSubtitle}>{selectedItem?.product?.name}</Text>
                 <Text style={styles.currentStock}>Current: {selectedItem?.quantity} {selectedItem?.product?.unit}</Text>
 
-                <View style={styles.actionButtons}>
-                  <TouchableOpacity
-                    style={[styles.actionButton, stockUpdate.action === 'add' && styles.actionButtonActive]}
-                    onPress={() => setStockUpdate({ ...stockUpdate, action: 'add' })}>
-                    <Text style={[styles.actionButtonText, stockUpdate.action === 'add' && styles.actionButtonTextActive]}>Add</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, stockUpdate.action === 'remove' && styles.actionButtonActive]}
-                    onPress={() => setStockUpdate({ ...stockUpdate, action: 'remove' })}>
-                    <Text style={[styles.actionButtonText, stockUpdate.action === 'remove' && styles.actionButtonTextActive]}>Remove</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.actionButton, stockUpdate.action === 'set' && styles.actionButtonActive]}
-                    onPress={() => setStockUpdate({ ...stockUpdate, action: 'set' })}>
-                    <Text style={[styles.actionButtonText, stockUpdate.action === 'set' && styles.actionButtonTextActive]}>Set</Text>
-                  </TouchableOpacity>
-                </View>
-
                 <View style={styles.inputGroup}>
-                  <Text style={styles.inputLabel}>Quantity</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g., 10"
-                    placeholderTextColor="#94a3b8"
-                    value={stockUpdate.quantity}
-                    onChangeText={(text) => setStockUpdate({ ...stockUpdate, quantity: text })}
-                    keyboardType="number-pad"
-                  />
+                  <Text style={styles.inputLabel}>New Quantity</Text>
+                  <View style={styles.quantityControls}>
+                    <TouchableOpacity
+                      style={styles.quantityButton}
+                      onPress={() => {
+                        const currentQty = parseInt(stockUpdate.quantity) || 0;
+                        if (currentQty > 0) {
+                          setStockUpdate({ ...stockUpdate, quantity: (currentQty - 1).toString() });
+                        }
+                      }}>
+                      <Minus size={20} color="#374151" />
+                    </TouchableOpacity>
+                    <TextInput
+                      style={styles.quantityInput}
+                      placeholder="0"
+                      placeholderTextColor="#94a3b8"
+                      value={stockUpdate.quantity}
+                      onChangeText={(text) => setStockUpdate({ ...stockUpdate, quantity: text })}
+                      keyboardType="number-pad"
+                    />
+                    <TouchableOpacity
+                      style={styles.quantityButton}
+                      onPress={() => {
+                        const currentQty = parseInt(stockUpdate.quantity) || 0;
+                        setStockUpdate({ ...stockUpdate, quantity: (currentQty + 1).toString() });
+                      }}>
+                      <Plus size={20} color="#374151" />
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 <View style={styles.modalButtons}>
@@ -1199,12 +1195,12 @@ export default function InventoryScreen() {
           currencySymbol={currencySymbol}
           userId={user?.uid}
           availableIngredients={inventory
-            .filter(item => item.product.product_type === 'ingredient')
+            .filter(item => item.product && item.product.product_type === 'ingredient')
             .map(item => ({
-              id: item.product.id,
-              name: item.product.name,
-              unit: item.product.unit,
-              cost: item.product.cost || 0,
+              id: item.product!.id,
+              name: item.product!.name,
+              unit: item.product!.unit,
+              cost: item.product!.cost || 0,
             }))
           }
           onCalculated={(perUnitCost) => {
@@ -1248,81 +1244,6 @@ export default function InventoryScreen() {
         />
       </Modal>
 
-      <Modal
-        visible={imageGalleryVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => {
-          setImageGalleryVisible(false);
-          setGalleryImages([]);
-          setImageSearchKeyword('');
-        }}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.galleryModalContent}>
-            <View style={styles.galleryHeader}>
-              <Text style={styles.modalTitle}>Search Images</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setImageGalleryVisible(false);
-                  setGalleryImages([]);
-                  setImageSearchKeyword('');
-                }}>
-                <Text style={styles.closeButton}>×</Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.searchContainer}>
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Enter search keyword (e.g., pandesal, bread)"
-                placeholderTextColor="#94a3b8"
-                value={imageSearchKeyword}
-                onChangeText={setImageSearchKeyword}
-                autoFocus
-              />
-              <TouchableOpacity
-                style={styles.searchButton}
-                onPress={searchImages}
-                disabled={searchingImage}>
-                {searchingImage ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.searchButtonText}>Search</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView style={styles.galleryScrollView}>
-              {galleryImages.length > 0 ? (
-                <View style={styles.galleryGrid}>
-                  {galleryImages.map((img, index) => (
-                    <TouchableOpacity
-                      key={index}
-                      style={styles.galleryImageContainer}
-                      onPress={() => selectImageFromGallery(img.url)}>
-                      <Image
-                        source={{ uri: img.url }}
-                        style={styles.galleryImage}
-                      />
-                      <Text style={styles.photographerText} numberOfLines={1}>
-                        {img.photographer}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              ) : (
-                <View style={styles.emptyGallery}>
-                  <ImageIcon size={48} color="#9ca3af" />
-                  <Text style={styles.emptyGalleryText}>
-                    Enter a keyword and tap Search to find images
-                  </Text>
-                </View>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
       {/* Custom Action Sheet */}
       <Modal
         visible={actionSheetVisible}
@@ -1349,23 +1270,25 @@ export default function InventoryScreen() {
                 </View>
                 
                 <View style={styles.actionSheetButtons}>
-                  <TouchableOpacity
-                    style={styles.actionSheetButton}
-                    onPress={() => {
-                      if (actionSheetItem) {
-                        openUpdateStock(actionSheetItem);
-                        setActionSheetVisible(false);
-                        setActionSheetItem(null);
-                      }
-                    }}>
-                    <View style={styles.actionSheetIconContainer}>
-                      <Package size={24} color="#8B6F47" />
-                    </View>
-                    <View style={styles.actionSheetButtonText}>
-                      <Text style={styles.actionSheetButtonTitle}>Update Stock</Text>
-                      <Text style={styles.actionSheetButtonDesc}>Add or remove inventory</Text>
-                    </View>
-                  </TouchableOpacity>
+                  {permissions.canUpdateInventory && (
+                    <TouchableOpacity
+                      style={styles.actionSheetButton}
+                      onPress={() => {
+                        if (actionSheetItem) {
+                          openUpdateStock(actionSheetItem);
+                          setActionSheetVisible(false);
+                          setActionSheetItem(null);
+                        }
+                      }}>
+                      <View style={styles.actionSheetIconContainer}>
+                        <Package size={24} color="#8B6F47" />
+                      </View>
+                      <View style={styles.actionSheetButtonText}>
+                        <Text style={styles.actionSheetButtonTitle}>Update Stock</Text>
+                        <Text style={styles.actionSheetButtonDesc}>Add or remove inventory</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
 
                   <TouchableOpacity
                     style={styles.actionSheetButton}
@@ -1577,6 +1500,25 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 2,
   },
+  gridItemTouchable: {
+    flex: 1,
+  },
+  gridEditButton: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    backgroundColor: '#8B6F47',
+    borderRadius: 16,
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 4,
+  },
   gridImageContainer: {
     width: '100%',
     aspectRatio: 1,
@@ -1728,6 +1670,12 @@ const styles = StyleSheet.create({
   },
   inputGroup: {
     marginBottom: 16,
+  },
+  labelWithAction: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   inputLabel: {
     fontSize: 14,
@@ -2119,5 +2067,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#8B6F47',
     textAlign: 'center',
+  },
+  quantityControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  quantityButton: {
+    backgroundColor: '#F5E6D3',
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#D4BA9C',
+  },
+  quantityInput: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#D4BA9C',
+    borderRadius: 8,
+    padding: 12,
+    fontSize: 18,
+    fontWeight: '600',
+    textAlign: 'center',
+    color: '#1e293b',
   },
 });

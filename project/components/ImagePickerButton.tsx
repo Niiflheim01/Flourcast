@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { View, TouchableOpacity, Image, StyleSheet, Alert, ActivityIndicator } from 'react-native';
-import { Text } from 'react-native-paper';
+import { View, TouchableOpacity, Image, StyleSheet, Alert, ActivityIndicator, Text } from 'react-native';
 import { Camera, ImageIcon, X } from 'lucide-react-native';
 import { ProductImageStorage, ProfileAvatarStorage } from '@/lib/image-storage';
 

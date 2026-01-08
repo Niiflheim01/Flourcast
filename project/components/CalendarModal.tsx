@@ -16,6 +16,8 @@ import {
 import { X, ChevronLeft, ChevronRight, Plus, Bell, Trash2 } from 'lucide-react-native';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useAuth } from '@/features/auth';
+import { getPermissions } from '@/features/shared';
 
 interface CalendarNote {
   id: string;
@@ -34,6 +36,8 @@ interface CalendarModalProps {
 }
 
 export function CalendarModal({ visible, onClose, userId, onNotesChange }: CalendarModalProps) {
+  const { profile } = useAuth();
+  const permissions = getPermissions(profile?.current_role || 'admin');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [notes, setNotes] = useState<CalendarNote[]>([]);
@@ -291,11 +295,13 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
               <Text style={styles.notesSectionTitle}>
                 Notes for {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
               </Text>
-              <TouchableOpacity
-                onPress={() => setShowNoteInput(!showNoteInput)}
-                style={styles.addButton}>
-                <Plus size={20} color="#FFFFFF" />
-              </TouchableOpacity>
+              {permissions.canAccessSettings && (
+                <TouchableOpacity
+                  onPress={() => setShowNoteInput(!showNoteInput)}
+                  style={styles.addButton}>
+                  <Plus size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+              )}
             </View>
 
             {showNoteInput && (
@@ -329,7 +335,7 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                 <View key={note.id} style={styles.noteCard}>
                   <Text style={styles.noteCardText}>{note.text}</Text>
                   <View style={styles.noteActions}>
-                    {!note.hasReminder && editingReminderId !== note.id && (
+                    {permissions.canAccessSettings && !note.hasReminder && editingReminderId !== note.id && (
                       <TouchableOpacity
                         onPress={() => {
                           setEditingReminderId(note.id);
@@ -448,7 +454,7 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                         <Text style={styles.reminderSetText}>{note.reminderTime}</Text>
                       </View>
                     )}
-                    {editingReminderId !== note.id && (
+                    {permissions.canAccessSettings && editingReminderId !== note.id && (
                       <TouchableOpacity
                         onPress={() => {
                           Alert.alert('Delete Note', 'Are you sure?', [
@@ -464,7 +470,9 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
                 </View>
               ))}
               {selectedNotes.length === 0 && (
-                <Text style={styles.emptyText}>No notes for this date</Text>
+                <Text style={styles.emptyText}>
+                  {permissions.canAccessSettings ? 'No notes for this date' : 'No reminders for this date'}
+                </Text>
               )}
             </ScrollView>
           </View>

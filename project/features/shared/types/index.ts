@@ -1,3 +1,9 @@
+/**
+ * Shared Types for Flourcast
+ * Central type definitions used across all features
+ */
+
+// Profile & User Types
 export interface Profile {
   id: string;
   bakery_name: string;
@@ -15,6 +21,7 @@ export interface Profile {
   updated_at: string;
 }
 
+// Category Types
 export interface Category {
   id: string;
   user_id: string;
@@ -23,6 +30,7 @@ export interface Category {
   created_at: string;
 }
 
+// Product Types
 export interface Product {
   id: string;
   user_id: string;
@@ -39,6 +47,11 @@ export interface Product {
   updated_at: string;
 }
 
+export interface ProductWithCategory extends Product {
+  category?: Category;
+}
+
+// Inventory Types
 export interface Inventory {
   id: string;
   user_id: string;
@@ -48,6 +61,11 @@ export interface Inventory {
   last_updated: string;
 }
 
+export interface InventoryWithProduct extends Inventory {
+  product?: Product;
+}
+
+// Sales Types
 export interface Sale {
   id: string;
   user_id: string;
@@ -63,6 +81,11 @@ export interface Sale {
   updated_at: string;
 }
 
+export interface SaleWithProduct extends Sale {
+  product?: Product;
+}
+
+// Forecast Types
 export interface Forecast {
   id: string;
   user_id: string;
@@ -75,6 +98,25 @@ export interface Forecast {
   created_at: string;
 }
 
+export interface ForecastWithProduct extends Forecast {
+  product?: Product;
+}
+
+// Recipe/Ingredient Types
+export interface ProductIngredient {
+  id: string;
+  product_id: string;
+  ingredient_id: string;
+  quantity: number;
+  batch_size: number;
+  created_at: string;
+}
+
+export interface ProductIngredientWithDetails extends ProductIngredient {
+  ingredient?: Product;
+}
+
+// Sync Types
 export interface SyncMetadata {
   id: string;
   user_id: string;
@@ -84,18 +126,20 @@ export interface SyncMetadata {
   sync_status: 'pending' | 'synced' | 'failed';
 }
 
-export interface ProductWithCategory extends Product {
-  category?: Category;
-}
+// Permission Types
+export type UserRole = 'admin' | 'staff';
 
-export interface SaleWithProduct extends Sale {
-  product?: Product;
-}
-
-export interface InventoryWithProduct extends Inventory {
-  product?: Product;
-}
-
-export interface ForecastWithProduct extends Forecast {
-  product?: Product;
+export interface PermissionCheck {
+  canEditPrices: boolean;
+  canEditCosts: boolean;
+  canDeleteProducts: boolean;
+  canDeleteCategories: boolean;
+  canDeleteSales: boolean;
+  canEditOldSales: boolean;
+  canGenerateForecasts: boolean;
+  canAccessSettings: boolean;
+  canViewForecasts: boolean;
+  canRecordSales: boolean;
+  canUpdateInventory: boolean;
+  canViewAnalytics: boolean;
 }

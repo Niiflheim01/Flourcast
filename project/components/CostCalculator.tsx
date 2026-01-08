@@ -270,7 +270,7 @@ export default function CostCalculator({ onCalculated, onClose, currencySymbol =
                           setShowUnitPicker(null);
                         }}>
                         <Text style={styles.ingredientOptionText}>
-                          {ing.name} ({ing.unit}) - {currencySymbol}{ing.cost.toFixed(2)}
+                          {`${ing.name} (${ing.unit}) - ${currencySymbol}${ing.cost.toFixed(2)}`}
                         </Text>
                       </TouchableOpacity>
                     ))}

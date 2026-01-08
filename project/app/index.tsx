@@ -1,6 +1,6 @@
 import { Redirect } from 'expo-router';
 import { View, Image, StyleSheet } from 'react-native';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth } from '@/features/auth';
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Asset } from 'expo-asset';
