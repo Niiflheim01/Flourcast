@@ -14,10 +14,10 @@ import {
   TouchableWithoutFeedback,
 } from 'react-native';
 import { X, ChevronLeft, ChevronRight, Plus, Bell, Trash2 } from 'lucide-react-native';
-import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuth } from '@/features/auth';
-import { getPermissions } from '@/features/shared';
+import { getPermissions, parseDateString } from '@/features/shared';
+import { NotificationService } from '@/lib/notifications';
 
 interface CalendarNote {
   id: string;
@@ -62,8 +62,12 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
   }, [visible]);
 
   const requestNotificationPermissions = async () => {
-    const { status } = await Notifications.requestPermissionsAsync();
-    if (status !== 'granted') {
+    const enabled = await NotificationService.getNotificationsEnabled();
+    if (!enabled) {
+      return; // User has disabled notifications in settings
+    }
+    const granted = await NotificationService.requestPermissions();
+    if (!granted) {
       Alert.alert('Permission Required', 'Please enable notifications to use reminders.');
     }
   };
@@ -92,9 +96,20 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
   const scheduleNotification = async (note: CalendarNote) => {
     if (!note.hasReminder || !note.reminderTime) return null;
 
+    // Check if notifications are enabled
+    const notificationsEnabled = await NotificationService.getNotificationsEnabled();
+    if (!notificationsEnabled) {
+      Alert.alert(
+        'Notifications Disabled', 
+        'Please enable notifications in Settings to receive reminders.'
+      );
+      return null;
+    }
+
     const [hours, minutes] = note.reminderTime.split(':').map(Number);
-    const notificationDate = new Date(note.date);
-    notificationDate.setHours(hours, minutes, 0, 0);
+    // Parse date parts explicitly to avoid UTC timezone issues
+    const [year, month, day] = note.date.split('-').map(Number);
+    const notificationDate = new Date(year, month - 1, day, hours, minutes, 0, 0);
 
     if (notificationDate < new Date()) {
       Alert.alert('Invalid Time', 'Reminder time must be in the future.');
@@ -102,14 +117,19 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
     }
 
     try {
-      const notificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Flourcast Reminder',
-          body: note.text,
-          sound: true,
-        },
-        trigger: notificationDate as any,
+      const notificationId = await NotificationService.scheduleNotification({
+        id: note.id,
+        type: 'reminder',
+        title: 'Flourcast Reminder',
+        body: note.text,
+        date: notificationDate,
+        data: { noteId: note.id, date: note.date },
       });
+
+      if (!notificationId) {
+        Alert.alert('Error', 'Could not schedule reminder. Please check notification permissions.');
+        return null;
+      }
 
       return notificationId;
     } catch (error) {
@@ -171,7 +191,7 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
   const deleteNote = async (noteId: string) => {
     const note = notes.find(n => n.id === noteId);
     if (note?.notificationId) {
-      await Notifications.cancelScheduledNotificationAsync(note.notificationId);
+      await NotificationService.cancelNotification(note.notificationId);
     }
     const updatedNotes = notes.filter(n => n.id !== noteId);
     await saveNotes(updatedNotes);
@@ -262,17 +282,17 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
             const dateStr = day ? formatDateString(day) : '';
             const hasNotes = day && getNotesForDate(dateStr).length > 0;
             const isSelected = dateStr === selectedDate;
-            const isToday =
-              day &&
-              new Date().toDateString() === new Date(currentDate.getFullYear(), currentDate.getMonth(), day).toDateString();
+            const isToday = day
+              ? new Date().toDateString() === new Date(currentDate.getFullYear(), currentDate.getMonth(), day).toDateString()
+              : false;
 
             return (
               <TouchableOpacity
                 key={index}
                 style={[
                   styles.dayCell,
+                  isToday && !isSelected && styles.todayDay,
                   isSelected && styles.selectedDay,
-                  isToday ? styles.todayDay : null,
                 ]}
                 onPress={() => day && setSelectedDate(dateStr)}
                 disabled={!day}>
@@ -293,7 +313,10 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
           <View style={styles.notesSection}>
             <View style={styles.notesSectionHeader}>
               <Text style={styles.notesSectionTitle}>
-                Notes for {new Date(selectedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                Notes for {(() => {
+                  const { year, month, day } = parseDateString(selectedDate);
+                  return new Date(year, month, day).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                })()}
               </Text>
               {permissions.canAccessSettings && (
                 <TouchableOpacity
@@ -487,7 +510,7 @@ export function CalendarModal({ visible, onClose, userId, onNotesChange }: Calen
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   header: {
     flexDirection: 'row',
@@ -496,9 +519,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: Platform.OS === 'ios' ? 60 : 40,
     paddingBottom: 16,
-    backgroundColor: '#D4BA9C',
+    backgroundColor: '#A67B5B',
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 6,
   },
   scrollView: {
     flex: 1,
@@ -506,7 +534,7 @@ const styles = StyleSheet.create({
   headerTitle: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#3a3a3a',
+    color: '#FFFFFF',
     fontFamily: Platform.OS === 'ios' ? 'System' : 'sans-serif-medium',
   },
   closeButton: {
@@ -521,11 +549,13 @@ const styles = StyleSheet.create({
   },
   navButton: {
     padding: 8,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
   },
   monthYear: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#3a3a3a',
+    color: '#1F2937',
   },
   weekDays: {
     flexDirection: 'row',
@@ -537,7 +567,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 12,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#9CA3AF',
   },
   daysGrid: {
     flexDirection: 'row',
@@ -552,18 +582,19 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   selectedDay: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#A67B5B',
     borderRadius: 12,
   },
   todayDay: {
     borderWidth: 2,
     borderColor: '#C89D5E',
     borderRadius: 12,
+    backgroundColor: '#FFF8E1',
   },
   dayText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#3a3a3a',
+    color: '#374151',
   },
   selectedDayText: {
     color: '#FFFFFF',
@@ -573,16 +604,23 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#DC6B19',
+    backgroundColor: '#C89D5E',
     marginTop: 2,
   },
   notesSection: {
     flex: 1,
-    backgroundColor: '#D4BA9C',
+    backgroundColor: '#FDF8F3',
     marginTop: 16,
     marginHorizontal: 16,
     borderRadius: 20,
     padding: 16,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: '#E8D5C4',
   },
   notesSectionHeader: {
     flexDirection: 'row',
@@ -593,10 +631,10 @@ const styles = StyleSheet.create({
   notesSectionTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#3a3a3a',
+    color: '#1F2937',
   },
   addButton: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     width: 32,
     height: 32,
     borderRadius: 16,
@@ -604,14 +642,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   noteInput: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#EDE4D9',
     borderRadius: 12,
     padding: 12,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#DDD0C0',
   },
   textInput: {
     fontSize: 14,
-    color: '#3a3a3a',
+    color: '#1F2937',
     minHeight: 60,
     textAlignVertical: 'top',
   },
@@ -622,7 +662,7 @@ const styles = StyleSheet.create({
   },
   saveButton: {
     flex: 1,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     borderRadius: 8,
     paddingVertical: 10,
     alignItems: 'center',
@@ -634,13 +674,13 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     flex: 1,
-    backgroundColor: '#C4AA8C',
+    backgroundColor: '#F3F4F6',
     borderRadius: 8,
     paddingVertical: 10,
     alignItems: 'center',
   },
   cancelButtonText: {
-    color: '#6B5439',
+    color: '#374151',
     fontWeight: '600',
     fontSize: 14,
   },
@@ -648,14 +688,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   noteCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#EDE4D9',
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#DDD0C0',
   },
   noteCardText: {
     fontSize: 14,
-    color: '#3a3a3a',
+    color: '#1F2937',
     marginBottom: 10,
     lineHeight: 20,
   },
@@ -687,18 +729,18 @@ const styles = StyleSheet.create({
   timeInput: {
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
     fontSize: 14,
-    color: '#3a3a3a',
+    color: '#1F2937',
     width: 70,
     textAlign: 'center',
   },
   periodSelector: {
     flexDirection: 'row',
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#F3F4F6',
     borderRadius: 8,
     padding: 2,
   },
@@ -708,18 +750,18 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   periodButtonActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#A67B5B',
   },
   periodText: {
     fontSize: 11,
-    color: '#6B5439',
+    color: '#6B7280',
     fontWeight: '600',
   },
   periodTextActive: {
     color: '#FFFFFF',
   },
   saveTimeButton: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: 8,
@@ -751,7 +793,7 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     textAlign: 'center',
-    color: '#8B7355',
+    color: '#6B7280',
     fontSize: 14,
     marginTop: 20,
   },

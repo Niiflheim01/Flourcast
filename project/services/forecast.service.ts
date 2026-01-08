@@ -1,9 +1,43 @@
 import { getDatabase, generateId } from '@/lib/database';
 import { Forecast, ForecastWithProduct } from '@/types/database';
 import { SalesService } from './sales.service.sqlite';
-import * as tf from '@tensorflow/tfjs';
 
 const MODEL_VERSION = 'v1.0.0';
+
+// TensorFlow is optional - we'll use smart prediction as fallback
+let tf: any = null;
+let tfReady = false;
+let tfInitAttempted = false;
+
+// Lazy load TensorFlow to prevent crashes
+async function ensureTfReady(): Promise<boolean> {
+  if (tfReady) return true;
+  if (tfInitAttempted) return false; // Don't retry if already failed
+  
+  tfInitAttempted = true;
+  
+  try {
+    // Dynamically import TensorFlow to catch import errors
+    const tfModule = await import('@tensorflow/tfjs');
+    tf = tfModule;
+    
+    // Try to import React Native backend
+    try {
+      await import('@tensorflow/tfjs-react-native');
+    } catch (rnError) {
+      console.log('TensorFlow React Native backend not available, using default');
+    }
+    
+    await tf.ready();
+    tfReady = true;
+    console.log('TensorFlow.js initialized successfully');
+    return true;
+  } catch (error) {
+    console.log('TensorFlow.js not available, using smart prediction fallback');
+    tfReady = false;
+    return false;
+  }
+}
 
 interface TrainingData {
   dates: Date[];
@@ -201,13 +235,28 @@ export class ForecastService {
 
   private static async tensorFlowPrediction(timeSeriesData: { date: Date; quantity: number; dayOfWeek: number }[]): Promise<{ quantity: number; confidence: number } | null> {
     try {
+      // Ensure TensorFlow is ready before proceeding
+      const isReady = await ensureTfReady();
+      if (!isReady || !tf) {
+        console.log('TensorFlow not available, falling back to smart prediction');
+        return null;
+      }
+
       // Normalize data
       const quantities = timeSeriesData.map(d => d.quantity);
       const { normalized, min, max } = this.normalizeData(quantities);
 
       // Create sequences for LSTM
       const sequenceLength = 7;
-      const { xs, ys } = this.createSequences(normalized, sequenceLength);
+      const result = this.createSequences(normalized, sequenceLength);
+      
+      // Check if sequence creation failed
+      if (!result) {
+        console.log('Failed to create sequences, not enough data');
+        return null;
+      }
+      
+      const { xs, ys } = result;
 
       if (xs.shape[0] < 7) {
         xs.dispose();
@@ -228,14 +277,14 @@ export class ForecastService {
       // Make prediction
       const lastSequence = normalized.slice(-sequenceLength);
       const inputTensor = tf.tensor3d([lastSequence.map(v => [v])]);
-      const predictionTensor = model.predict(inputTensor) as tf.Tensor;
+      const predictionTensor = model.predict(inputTensor) as any;
       const normalizedPrediction = (await predictionTensor.data())[0];
 
       // Denormalize
       const prediction = this.denormalize(normalizedPrediction, min, max);
 
       // Calculate confidence from loss
-      const finalLoss = await model.evaluate(xs, ys) as tf.Tensor;
+      const finalLoss = await model.evaluate(xs, ys) as any;
       const lossValue = (await finalLoss.data())[0];
       const confidence = Math.max(0.3, Math.min(0.95, 1 - Math.min(lossValue, 0.7)));
 
@@ -424,7 +473,7 @@ export class ForecastService {
     return value * range + min;
   }
 
-  private static createSequences(data: number[], sequenceLength: number): { xs: tf.Tensor3D; ys: tf.Tensor2D } {
+  private static createSequences(data: number[], sequenceLength: number): { xs: any; ys: any } | null {
     const sequences: number[][] = [];
     const targets: number[] = [];
 
@@ -433,14 +482,33 @@ export class ForecastService {
       targets.push(data[i + sequenceLength]);
     }
 
-    // Convert to tensors
-    const xs = tf.tensor3d(sequences.map(seq => seq.map(val => [val])));
-    const ys = tf.tensor2d(targets.map(val => [val]));
+    // Check if we have enough sequences
+    if (sequences.length === 0 || targets.length === 0) {
+      return null;
+    }
 
-    return { xs, ys };
+    // Make sure tf is available
+    if (!tf) {
+      return null;
+    }
+
+    try {
+      // Convert to tensors
+      const xs = tf.tensor3d(sequences.map(seq => seq.map(val => [val])));
+      const ys = tf.tensor2d(targets.map(val => [val]));
+
+      return { xs, ys };
+    } catch (error) {
+      console.error('Error creating sequences:', error);
+      return null;
+    }
   }
 
-  private static buildLSTMModel(sequenceLength: number): tf.Sequential {
+  private static buildLSTMModel(sequenceLength: number): any {
+    if (!tf) {
+      throw new Error('TensorFlow not initialized');
+    }
+    
     const model = tf.sequential();
 
     // LSTM layer

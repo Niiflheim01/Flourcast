@@ -66,7 +66,9 @@ export const canStaffEditSale = (saleDate: string): boolean => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const saleDateObj = new Date(saleDate);
+  // Parse date string in local timezone to avoid UTC offset issues
+  const [year, month, day] = saleDate.split('-').map(Number);
+  const saleDateObj = new Date(year, month - 1, day);
   saleDateObj.setHours(0, 0, 0, 0);
 
   return saleDateObj.getTime() === today.getTime();

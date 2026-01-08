@@ -1,12 +1,13 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput, Modal, Switch, SafeAreaView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert, TextInput, Modal, Switch, SafeAreaView, Image, Linking } from 'react-native';
 import { router } from 'expo-router';
 import { useAuth } from '@/features/auth';
 import { ProfileService } from '@/features/auth';
 import { getCurrencySymbol } from '@/features/shared';
-import { AdminRoleManager, CURRENCIES, TIMEZONES } from '@/features/settings';
-import { User, LogOut, Store, Edit, Settings, ChevronRight, Bell, Globe, ChevronDown } from 'lucide-react-native';
-import { useState } from 'react';
+import { AdminRoleManager, CURRENCIES } from '@/features/settings';
+import { User, LogOut, Store, Edit, Settings, ChevronRight, Bell, ChevronDown } from 'lucide-react-native';
+import { useState, useEffect } from 'react';
 import ImagePickerButton from '@/components/ImagePickerButton';
+import { NotificationService } from '@/lib/notifications';
 
 export default function ProfileScreen() {
   const { profile, signOut, refreshProfile } = useAuth();
@@ -14,12 +15,50 @@ export default function ProfileScreen() {
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [bakeryName, setBakeryName] = useState(profile?.bakery_name || '');
   const [currency, setCurrency] = useState(profile?.currency || 'PHP');
-  const [timezone, setTimezone] = useState(profile?.timezone || 'Asia/Manila');
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [adminMode, setAdminMode] = useState(profile?.admin_mode || false);
   const [showCurrencyPicker, setShowCurrencyPicker] = useState(false);
-  const [showTimezonePicker, setShowTimezonePicker] = useState(false);
 
+  // Load notification preference on mount
+  useEffect(() => {
+    loadNotificationPreference();
+  }, []);
+
+  const loadNotificationPreference = async () => {
+    const enabled = await NotificationService.getNotificationsEnabled();
+    const hasPermission = await NotificationService.getDevicePermissionStatus();
+    setNotificationsEnabled(enabled && hasPermission);
+  };
+
+  const handleToggleNotifications = async (value: boolean) => {
+    if (value) {
+      // Request permission when enabling
+      const granted = await NotificationService.requestPermissions();
+      if (!granted) {
+        Alert.alert(
+          'Permission Required',
+          'Please enable notifications in your device settings to receive alerts and reminders.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { 
+              text: 'Open Settings', 
+              onPress: () => Linking.openSettings() 
+            },
+          ]
+        );
+        return;
+      }
+      await NotificationService.setNotificationsEnabled(true);
+      setNotificationsEnabled(true);
+      Alert.alert('Notifications Enabled', 'You will now receive alerts, reminders, and event notifications.');
+    } else {
+      // Disable notifications and cancel ALL pending notifications
+      await NotificationService.setNotificationsEnabled(false);
+      await NotificationService.cancelAllNotifications();
+      setNotificationsEnabled(false);
+      Alert.alert('Notifications Disabled', 'All notifications have been turned off. You will no longer receive any push notifications.');
+    }
+  };
 
   const handleSignOut = () => {
     Alert.alert(
@@ -69,7 +108,6 @@ export default function ProfileScreen() {
       await ProfileService.updateProfile(profile.id, {
         bakery_name: bakeryName,
         currency,
-        timezone,
       });
       await refreshProfile(); // Refresh the profile data
       setEditModalVisible(false);
@@ -85,28 +123,45 @@ export default function ProfileScreen() {
         <View style={styles.content}>
         {/* Profile Header */}
         <View style={styles.profileHeader}>
-          <ImagePickerButton
-            currentImageUri={avatarUrl}
-            onImageSelected={async (uri) => {
-              setAvatarUrl(uri);
-              if (profile?.id) {
-                await ProfileService.updateProfile(profile.id, { avatar_url: uri });
-                await refreshProfile(); // Refresh the profile data
-              }
-            }}
-            type="profile"
-            size={100}
-            showRemoveButton={false}
-          />
+          {profile?.current_role === 'admin' ? (
+            <ImagePickerButton
+              currentImageUri={avatarUrl}
+              onImageSelected={async (uri) => {
+                setAvatarUrl(uri);
+                if (profile?.id) {
+                  await ProfileService.updateProfile(profile.id, { avatar_url: uri });
+                  await refreshProfile(); // Refresh the profile data
+                }
+              }}
+              type="profile"
+              size={100}
+              showRemoveButton={false}
+            />
+          ) : (
+            <View style={{ width: 100, height: 100, borderRadius: 50, overflow: 'hidden', backgroundColor: '#e5e7eb' }}>
+              {avatarUrl ? (
+                <Image 
+                  source={{ uri: avatarUrl }} 
+                  style={{ width: 100, height: 100 }} 
+                />
+              ) : (
+                <View style={{ width: 100, height: 100, justifyContent: 'center', alignItems: 'center' }}>
+                  <Text style={{ color: '#9ca3af', fontSize: 12 }}>No Photo</Text>
+                </View>
+              )}
+            </View>
+          )}
           <Text style={styles.profileName}>{profile?.bakery_name}</Text>
           <Text style={styles.profileEmail}>{profile?.email}</Text>
           
-          <TouchableOpacity 
-            style={styles.editProfileButton}
-            onPress={() => setEditModalVisible(true)}>
-            <Edit size={16} color="#8B6F47" />
-            <Text style={styles.editProfileButtonText}>Edit Profile</Text>
-          </TouchableOpacity>
+          {profile?.current_role === 'admin' && (
+            <TouchableOpacity 
+              style={styles.editProfileButton}
+              onPress={() => setEditModalVisible(true)}>
+              <Edit size={16} color="#8B6F47" />
+              <Text style={styles.editProfileButtonText}>Edit Profile</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         {/* Profile Information */}
@@ -132,16 +187,6 @@ export default function ProfileScreen() {
                 <Text style={styles.infoValue}>{profile?.currency}</Text>
               </View>
             </View>
-
-            <View style={styles.divider} />
-
-            <View style={styles.infoRow}>
-              <Globe size={20} color="#8B6F47" />
-              <View style={styles.infoContent}>
-                <Text style={styles.infoLabel}>Timezone</Text>
-                <Text style={styles.infoValue}>{profile?.timezone}</Text>
-              </View>
-            </View>
           </View>
         </View>
 
@@ -152,13 +197,13 @@ export default function ProfileScreen() {
             <View style={styles.settingRow}>
               <View style={styles.settingLeft}>
                 <Bell size={20} color="#8B6F47" />
-                <Text style={styles.settingLabel}>Notifications</Text>
+                <Text style={styles.settingLabel}>Push Notifications</Text>
               </View>
               <Switch
                 value={notificationsEnabled}
-                onValueChange={setNotificationsEnabled}
-                trackColor={{ false: '#D4BA9C', true: '#C89D5E' }}
-                thumbColor={notificationsEnabled ? '#8B6F47' : '#F5E6D3'}
+                onValueChange={handleToggleNotifications}
+                trackColor={{ false: '#D4BA9C', true: '#90EE90' }}
+                thumbColor={notificationsEnabled ? '#10B981' : '#F5E6D3'}
               />
             </View>
 
@@ -188,11 +233,12 @@ export default function ProfileScreen() {
       </View>
 
       {/* Edit Profile Modal */}
-      <Modal
-        visible={editModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setEditModalVisible(false)}>
+      {profile?.current_role === 'admin' && (
+        <Modal
+          visible={editModalVisible}
+          animationType="slide"
+          transparent
+          onRequestClose={() => setEditModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Edit Profile</Text>
@@ -240,38 +286,6 @@ export default function ProfileScreen() {
               )}
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Timezone</Text>
-              <TouchableOpacity
-                style={styles.pickerButton}
-                onPress={() => setShowTimezonePicker(!showTimezonePicker)}>
-                <Text style={styles.pickerButtonText}>
-                  {TIMEZONES.find(tz => tz.value === timezone)?.label || timezone}
-                </Text>
-                <ChevronDown size={20} color="#6b7280" />
-              </TouchableOpacity>
-              {showTimezonePicker && (
-                <View style={styles.pickerDropdown}>
-                  <ScrollView style={styles.pickerScroll}>
-                    {TIMEZONES.map((tz) => (
-                      <TouchableOpacity
-                        key={tz.value}
-                        style={[
-                          styles.pickerOption,
-                          timezone === tz.value && styles.pickerOptionSelected,
-                        ]}
-                        onPress={() => {
-                          setTimezone(tz.value);
-                          setShowTimezonePicker(false);
-                        }}>
-                        <Text style={styles.pickerOptionText}>{tz.label}</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                </View>
-              )}
-            </View>
-
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={styles.cancelButton}
@@ -279,7 +293,6 @@ export default function ProfileScreen() {
                   setEditModalVisible(false);
                   setBakeryName(profile?.bakery_name || '');
                   setCurrency(profile?.currency || 'PHP');
-                  setTimezone(profile?.timezone || 'Asia/Manila');
                 }}>
                 <Text style={styles.cancelButtonText}>Cancel</Text>
               </TouchableOpacity>
@@ -290,6 +303,7 @@ export default function ProfileScreen() {
           </View>
         </View>
       </Modal>
+      )}
 
       </ScrollView>
     </SafeAreaView>
@@ -299,32 +313,32 @@ export default function ProfileScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   container: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   content: {
     paddingBottom: 32,
   },
   profileHeader: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#8B5A2B',
     alignItems: 'center',
     paddingVertical: 32,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#D4BA9C',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
   profileName: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#FFFFFF',
     marginTop: 16,
   },
   profileEmail: {
     fontSize: 14,
-    color: '#8B7355',
+    color: '#F5EDE4',
     marginTop: 4,
   },
   editProfileButton: {
@@ -334,15 +348,15 @@ const styles = StyleSheet.create({
     marginTop: 16,
     paddingVertical: 8,
     paddingHorizontal: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F5EDE4',
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   editProfileButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#8B6F47',
+    color: '#374151',
   },
   section: {
     marginBottom: 24,
@@ -351,7 +365,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
     marginBottom: 12,
     marginTop: 24,
   },
@@ -359,25 +373,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   settingsCard: {
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 0,
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
     overflow: 'hidden',
   },
   settingRow: {
@@ -394,12 +408,12 @@ const styles = StyleSheet.create({
   },
   settingLabel: {
     fontSize: 16,
-    color: '#6B5439',
+    color: '#374151',
     fontWeight: '500',
   },
   settingDescription: {
     fontSize: 12,
-    color: '#8B7355',
+    color: '#6B7280',
     marginTop: 2,
   },
   modalOverlay: {
@@ -410,16 +424,18 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalContent: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 24,
     width: '100%',
     maxWidth: 400,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#1F2937',
     marginBottom: 20,
   },
   inputGroup: {
@@ -428,17 +444,17 @@ const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#374151',
     marginBottom: 6,
   },
   input: {
     backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
-    color: '#6B5439',
+    color: '#1F2937',
   },
   modalButtons: {
     flexDirection: 'row',
@@ -450,20 +466,20 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
   },
   cancelButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#8B7355',
+    color: '#6B7280',
   },
   saveButton: {
     flex: 1,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     alignItems: 'center',
   },
   saveButtonText: {
@@ -481,17 +497,17 @@ const styles = StyleSheet.create({
   },
   infoLabel: {
     fontSize: 12,
-    color: '#8B7355',
+    color: '#6B7280',
     marginBottom: 4,
   },
   infoValue: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#6B5439',
+    color: '#1F2937',
   },
   divider: {
     height: 1,
-    backgroundColor: '#D4BA9C',
+    backgroundColor: '#E5E7EB',
     marginVertical: 16,
   },
   dangerButton: {
@@ -517,12 +533,12 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#8B7355',
+    color: '#6B7280',
     marginBottom: 4,
   },
   footerSubtext: {
     fontSize: 12,
-    color: '#A59B8C',
+    color: '#9CA3AF',
   },
   pickerButton: {
     flexDirection: 'row',
@@ -530,19 +546,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     borderRadius: 8,
     padding: 12,
   },
   pickerButtonText: {
     fontSize: 16,
-    color: '#6B5439',
+    color: '#1F2937',
     flex: 1,
   },
   pickerDropdown: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     borderRadius: 8,
     maxHeight: 200,
     marginTop: 8,
@@ -558,14 +574,14 @@ const styles = StyleSheet.create({
   pickerOption: {
     padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#D4BA9C',
+    borderBottomColor: '#E5E7EB',
   },
   pickerOptionSelected: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F5E6D3',
   },
   pickerOptionText: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#374151',
   },
   currencyIcon: {
     width: 20,

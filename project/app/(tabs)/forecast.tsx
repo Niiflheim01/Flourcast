@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,11 +13,15 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
+  Modal,
+  TouchableWithoutFeedback,
+  Animated,
+  Easing,
 } from 'react-native';
 import { useAuth } from '@/features/auth';
 import { ForecastService } from '@/features/forecast';
-import { ForecastWithProduct, getPermissions } from '@/features/shared';
-import { TrendingUp, RefreshCw, Sparkles, Package, ChefHat, AlertCircle, TrendingDown, Minus, BarChart3, ChevronDown, ChevronUp, CheckCircle } from 'lucide-react-native';
+import { ForecastWithProduct, getPermissions, getCurrencySymbol } from '@/features/shared';
+import { TrendingUp, RefreshCw, Sparkles, Package, ChefHat, AlertCircle, TrendingDown, Minus, BarChart3, ChevronDown, ChevronUp, CheckCircle, Trophy, Activity, Lightbulb } from 'lucide-react-native';
 import { useFocusEffect } from 'expo-router';
 import { SalesService } from '@/features/sales';
 import { InventoryService, ProductService } from '@/features/inventory';
@@ -71,15 +75,24 @@ interface TopProduct {
 export default function ForecastScreen() {
   const { user, profile } = useAuth();
   const permissions = getPermissions(profile?.current_role || 'admin');
+  const currencySymbol = getCurrencySymbol(profile?.currency || 'PHP');
   const [activeTab, setActiveTab] = useState<'baking' | 'analysis'>('baking');
+  const [forecastDateRange, setForecastDateRange] = useState<7 | 30 | 180 | 90 | 365>(7);
+  const [showDateRangeModal, setShowDateRangeModal] = useState(false);
   const [forecasts, setForecasts] = useState<ForecastWithProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [wasRefreshing, setWasRefreshing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const pullProgress = useRef(new Animated.Value(0)).current;
+  const spinningRef = useRef(false);
   const [bakingPlans, setBakingPlans] = useState<BakingPlan[]>([]);
   const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
   const [productInsights, setProductInsights] = useState<ProductInsight[]>([]);
   const [expandedInsight, setExpandedInsight] = useState<string | null>(null);
+  const [salesStats, setSalesStats] = useState({ totalRevenue: 0, totalItems: 0, totalTransactions: 0 });
 
   const toggleInsightExpand = (productId: string) => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -89,7 +102,7 @@ export default function ForecastScreen() {
   useFocusEffect(
     useCallback(() => {
       loadData();
-    }, [user])
+    }, [user, forecastDateRange])
   );
 
   const loadData = async () => {
@@ -100,13 +113,22 @@ export default function ForecastScreen() {
       tomorrow.setDate(tomorrow.getDate() + 1);
       const tomorrowStr = formatDateStr(tomorrow);
 
-      const [forecastsData, topProductsData] = await Promise.all([
+      // Calculate date range for sales stats
+      const endDate = new Date();
+      const startDate = new Date();
+      startDate.setDate(startDate.getDate() - forecastDateRange);
+      const startDateStr = formatDateStr(startDate);
+      const endDateStr = formatDateStr(endDate);
+
+      const [forecastsData, topProductsData, statsData] = await Promise.all([
         ForecastService.getForecastsForDate(user.uid, tomorrowStr),
-        SalesService.getTopSellingProducts(user.uid, 7)
+        SalesService.getTopSellingProducts(user.uid, forecastDateRange),
+        SalesService.getSalesStats(user.uid, startDateStr, endDateStr)
       ]);
 
       setForecasts(forecastsData);
       setTopProducts(topProductsData.slice(0, 5));
+      setSalesStats(statsData);
 
       await generateBakingPlans(forecastsData);
       await generateProductInsights();
@@ -115,7 +137,6 @@ export default function ForecastScreen() {
       console.error('Error loading data:', error);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
@@ -296,8 +317,77 @@ export default function ForecastScreen() {
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadData();
-  }, [user]);
+    setWasRefreshing(true);
+    Animated.spring(pullProgress, {
+      toValue: 1,
+      friction: 8,
+      tension: 60,
+      useNativeDriver: true,
+    }).start();
+    
+    loadData().finally(() => {
+      setTimeout(() => {
+        setRefreshing(false);
+        setIsPulling(false);
+        Animated.timing(pullProgress, {
+          toValue: 0,
+          duration: 300,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }).start(() => {
+          setWasRefreshing(false);
+        });
+      }, 500);
+    });
+  }, [user, forecastDateRange]);
+
+  // Chef hat spin animation - only when refreshing
+  useEffect(() => {
+    if (refreshing) {
+      if (!spinningRef.current) {
+        spinningRef.current = true;
+        spinValue.setValue(0);
+        Animated.loop(
+          Animated.timing(spinValue, {
+            toValue: 1,
+            duration: 1000,
+            easing: Easing.linear,
+            useNativeDriver: true,
+          })
+        ).start();
+      }
+    } else {
+      spinValue.stopAnimation();
+      spinningRef.current = false;
+    }
+  }, [refreshing]);
+
+  // Track scroll position for interactive pull
+  const handleScroll = (event: any) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    
+    if (offsetY < 0 && !refreshing) {
+      const progress = Math.min(Math.abs(offsetY) / 100, 1);
+      pullProgress.setValue(progress);
+      
+      if (!isPulling && progress > 0.1) {
+        setIsPulling(true);
+      }
+    }
+  };
+
+  // Handle scroll end - hide indicator if not refreshing
+  const handleScrollEnd = () => {
+    if (!refreshing && isPulling) {
+      setIsPulling(false);
+      Animated.timing(pullProgress, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+    }
+  };
 
   const formatDateStr = (date: Date): string => {
     const year = date.getFullYear();
@@ -310,7 +400,7 @@ export default function ForecastScreen() {
     switch (priority) {
       case 'urgent': return '#DC2626';
       case 'needed': return '#F59E0B';
-      case 'optional': return '#3B82F6';
+      case 'optional': return '#FBBF24'; // Light yellow for optional
       case 'skip': return '#10B981';
       default: return '#6B7280';
     }
@@ -327,6 +417,7 @@ export default function ForecastScreen() {
   };
 
   const toggleInsightExpanded = (productId: string) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
     setProductInsights(prev => prev.map(insight => 
       insight.productId === productId 
         ? { ...insight, expanded: !insight.expanded }
@@ -391,9 +482,73 @@ export default function ForecastScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Chef Hat Refresh Indicator - Follows pull progress */}
+      <Animated.View
+        style={[
+          styles.chefHatRefreshOverlayForecast,
+          {
+            opacity: pullProgress.interpolate({
+              inputRange: [0, 0.2, 1],
+              outputRange: [0, 1, 1],
+              extrapolate: 'clamp'
+            }),
+            transform: [
+              {
+                translateY: pullProgress.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [-70, 0],
+                  extrapolate: 'clamp'
+                })
+              }
+            ]
+          }
+        ]}
+        pointerEvents="none"
+      >
+        <Animated.View
+          style={[
+            styles.chefHatRefreshIcon,
+            {
+              transform: [
+                { 
+                  rotate: refreshing 
+                    ? spinValue.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+                    : pullProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] })
+                },
+                {
+                  scale: pullProgress.interpolate({
+                    inputRange: [0, 0.5, 1],
+                    outputRange: [0.7, 0.9, 1],
+                    extrapolate: 'clamp'
+                  })
+                }
+              ]
+            }
+          ]}
+        >
+          <ChefHat size={24} color="#8B6F47" strokeWidth={2} />
+        </Animated.View>
+        <Text style={styles.chefHatRefreshText}>
+          {(refreshing || wasRefreshing) ? 'Refreshing...' : 'Pull to refresh'}
+        </Text>
+      </Animated.View>
+
       <ScrollView
         style={styles.container}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+        onScroll={handleScroll}
+        onScrollEndDrag={handleScrollEnd}
+        onMomentumScrollEnd={handleScrollEnd}
+        scrollEventThrottle={16}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="transparent"
+            colors={['transparent']}
+            progressBackgroundColor="transparent"
+            progressViewOffset={0}
+          />
+        }>
         <View style={styles.content}>
 
           {/* BAKING PLAN TAB */}
@@ -486,7 +641,7 @@ export default function ForecastScreen() {
                           <Text style={styles.bakingItemName} numberOfLines={1}>
                             {plan.productName}
                           </Text>
-                          <View style={[styles.priorityBadge, { backgroundColor: getPriorityColor(plan.priority) }]}>
+                          <View style={[styles.priorityBadge, { backgroundColor: plan.reliability === 0 ? '#DC2626' : getPriorityColor(plan.priority) }]}>
                             <Text style={styles.priorityBadgeText}>
                               {plan.reliability === 0 ? 'NO DATA' : getPriorityLabel(plan.priority)}
                             </Text>
@@ -504,7 +659,11 @@ export default function ForecastScreen() {
                                 <Text style={styles.bakingMetricLabel}>Expected</Text>
                                 <Text style={styles.bakingMetricValue}>{plan.expectedSales}</Text>
                               </View>
-                              <View style={styles.bakingMetricHighlight}>
+                              <View style={[
+                                styles.bakingMetricHighlight,
+                                plan.needToBake === 0 ? styles.bakingMetricReady : 
+                                  plan.priority === 'optional' ? styles.bakingMetricOptional : styles.bakingMetricNeedsBake
+                              ]}>
                                 <Text style={styles.bakingMetricLabelHighlight}>
                                   {plan.needToBake > 0 ? 'Bake' : 'Ready'}
                                 </Text>
@@ -517,7 +676,13 @@ export default function ForecastScreen() {
                             <View style={styles.reliabilityRow}>
                               <Text style={styles.reliabilityLabel}>Reliability</Text>
                               <View style={styles.reliabilityBar}>
-                                <View style={[styles.reliabilityFill, { width: `${plan.reliability}%` }]} />
+                                <View style={[
+                                  styles.reliabilityFill, 
+                                  { width: `${plan.reliability}%` },
+                                  plan.reliability < 40 && styles.reliabilityLow,
+                                  plan.reliability >= 40 && plan.reliability < 70 && styles.reliabilityMedium,
+                                  plan.reliability >= 70 && styles.reliabilityHigh,
+                                ]} />
                               </View>
                               <Text style={styles.reliabilityValue}>{plan.reliability}%</Text>
                             </View>
@@ -534,7 +699,10 @@ export default function ForecastScreen() {
                   </View>
 
                   <View style={styles.tipCard}>
-                    <Text style={styles.tipTitle}>💡 Tip</Text>
+                    <View style={styles.tipHeader}>
+                      <Lightbulb size={18} color="#8B6F47" />
+                      <Text style={styles.tipTitle}>Tip</Text>
+                    </View>
                     <Text style={styles.tipText}>
                       Higher reliability = more consistent sales pattern. Low reliability items may need extra buffer stock.
                     </Text>
@@ -549,13 +717,41 @@ export default function ForecastScreen() {
             <>
               <View style={styles.header}>
                 <Text style={styles.title}>Sales Analysis</Text>
-                <Text style={styles.subtitle}>Last 7 Days</Text>
+                {permissions.canAccessSettings && (
+                  <TouchableOpacity onPress={() => setShowDateRangeModal(true)}>
+                    <Text style={styles.subtitle}>
+                      {forecastDateRange === 7 ? 'Last 7 Days' : forecastDateRange === 30 ? 'Last 1 Month' : forecastDateRange === 180 ? 'Last 6 Months' : forecastDateRange === 90 ? 'Last 3 Months' : 'Last 1 Year'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+                {!permissions.canAccessSettings && (
+                  <Text style={styles.subtitle}>Last 7 Days</Text>
+                )}
+              </View>
+
+              {/* Sales Stats Cards */}
+              <View style={styles.analysisStatsContainer}>
+                <View style={styles.analysisStatCard}>
+                  <Text style={styles.analysisStatValue} numberOfLines={1} adjustsFontSizeToFit>
+                    {currencySymbol}{salesStats.totalRevenue.toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </Text>
+                  <Text style={styles.analysisStatLabel}>Total Revenue</Text>
+                </View>
+                <View style={styles.analysisStatCard}>
+                  <Text style={styles.analysisStatValue} numberOfLines={1} adjustsFontSizeToFit>
+                    {salesStats.totalItems.toLocaleString()}
+                  </Text>
+                  <Text style={styles.analysisStatLabel}>Items Sold</Text>
+                </View>
               </View>
 
               {/* Bestsellers Chart - Simplified Horizontal Bars */}
               {topProducts.length > 0 && (
                 <View style={styles.chartSection}>
-                  <Text style={styles.sectionTitle}>🏆 Top Sellers</Text>
+                  <View style={styles.sectionTitleRow}>
+                    <Trophy size={20} color="#A67B5B" />
+                    <Text style={styles.sectionTitle}>Top Sellers</Text>
+                  </View>
                   <View style={styles.horizontalChart}>
                     {topProducts.map((product, index) => (
                       <View key={index} style={styles.chartRow}>
@@ -585,7 +781,10 @@ export default function ForecastScreen() {
               )}
 
               {/* Product Performance */}
-              <Text style={styles.sectionTitle}>📊 Product Performance</Text>
+              <View style={styles.sectionTitleRow}>
+                <BarChart3 size={20} color="#A67B5B" />
+                <Text style={styles.sectionTitle}>Product Performance</Text>
+              </View>
               <Text style={styles.sectionHint}>Tap any product for more details</Text>
               
               {productInsights.length === 0 ? (
@@ -597,7 +796,13 @@ export default function ForecastScreen() {
                   {productInsights.map((insight, index) => (
                     <TouchableOpacity 
                       key={index} 
-                      style={[styles.insightItem, insight.expanded && styles.insightItemExpanded]}
+                      style={[
+                        styles.insightItem, 
+                        insight.expanded && styles.insightItemExpanded,
+                        insight.expanded && {
+                          borderLeftColor: insight.performanceScore >= 75 ? '#10B981' : insight.performanceScore >= 50 ? '#F59E0B' : '#DC2626'
+                        }
+                      ]}
                       onPress={() => toggleInsightExpanded(insight.productId)}
                       activeOpacity={0.7}
                     >
@@ -653,6 +858,34 @@ export default function ForecastScreen() {
                       {/* Expanded Details */}
                       {insight.expanded && (
                         <View style={styles.insightExpanded}>
+                          {/* Score Explanation */}
+                          <View style={[
+                            styles.scoreExplanation,
+                            { backgroundColor: insight.performanceScore >= 75 ? '#D1FAE520' : insight.performanceScore >= 50 ? '#FEF3C720' : '#FEE2E220' }
+                          ]}>
+                            <View style={styles.scoreExplanationHeader}>
+                              <Text style={[
+                                styles.scoreExplanationScore,
+                                { color: insight.performanceScore >= 75 ? '#10B981' : insight.performanceScore >= 50 ? '#F59E0B' : '#DC2626' }
+                              ]}>
+                                Score: {insight.performanceScore}
+                              </Text>
+                              <Text style={[
+                                styles.scoreExplanationRating,
+                                { color: insight.performanceScore >= 75 ? '#10B981' : insight.performanceScore >= 50 ? '#F59E0B' : '#DC2626' }
+                              ]}>
+                                {insight.performanceScore >= 75 ? 'Excellent' : insight.performanceScore >= 50 ? 'Average' : 'Needs Attention'}
+                              </Text>
+                            </View>
+                            <Text style={styles.scoreExplanationText}>
+                              {insight.performanceScore >= 75 
+                                ? 'This product is performing exceptionally well with strong, consistent sales. Keep stock levels optimal to meet demand.'
+                                : insight.performanceScore >= 50 
+                                ? 'This product has moderate performance. Consider promotions or adjusting stock levels to improve sales.'
+                                : 'This product needs attention. Low sales or inconsistent patterns detected. Review pricing, visibility, or consider reducing stock.'}
+                            </Text>
+                          </View>
+
                           <View style={styles.insightExpandedRow}>
                             <View style={styles.insightExpandedItem}>
                               <Text style={styles.insightExpandedLabel}>Avg Daily Sales</Text>
@@ -687,29 +920,115 @@ export default function ForecastScreen() {
                 </View>
               )}
 
-              {/* Products with No Sales */}
+              {/* Products with No Sales - Modern Design */}
               {productInsights.filter(p => p.last7DaysSales === 0).length > 0 && (
-                <View style={styles.warningSection}>
-                  <Text style={styles.warningSectionTitle}>⚠️ Not Selling</Text>
-                  <Text style={styles.warningSectionText}>
-                    {productInsights.filter(p => p.last7DaysSales === 0).map(p => p.productName).join(', ')}
-                  </Text>
+                <View style={styles.notSellingCard}>
+                  <View style={styles.notSellingHeader}>
+                    <View style={styles.notSellingIconContainer}>
+                      <AlertCircle size={18} color="#DC2626" strokeWidth={2.5} />
+                    </View>
+                    <View style={styles.notSellingHeaderText}>
+                      <Text style={styles.notSellingTitle}>Not Selling</Text>
+                      <Text style={styles.notSellingSubtitle}>No sales in the last 7 days</Text>
+                    </View>
+                  </View>
+                  <View style={styles.notSellingProductsContainer}>
+                    {productInsights.filter(p => p.last7DaysSales === 0).map((p, index) => (
+                      <View key={index} style={styles.notSellingProductBadge}>
+                        <Text style={styles.notSellingProductText}>{p.productName}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
               )}
 
-              <View style={styles.tipCard}>
-                <Text style={styles.tipTitle}>📊 Score Guide</Text>
-                <Text style={styles.tipText}>
-                  <Text style={{ color: '#10B981', fontWeight: '600' }}>75-100</Text> Excellent{'\n'}
-                  <Text style={{ color: '#F59E0B', fontWeight: '600' }}>50-74</Text> Average{'\n'}
-                  <Text style={{ color: '#DC2626', fontWeight: '600' }}>0-49</Text> Needs attention
-                </Text>
+              {/* Score Guide - Modern Legend Design */}
+              <View style={styles.scoreGuideCard}>
+                <View style={styles.scoreGuideHeader}>
+                  <BarChart3 size={16} color="#8B6F47" strokeWidth={2} />
+                  <Text style={styles.scoreGuideTitle}>Score Guide</Text>
+                </View>
+                <View style={styles.scoreGuideContent}>
+                  <View style={styles.scoreGuideItem}>
+                    <View style={[styles.scoreIndicator, styles.scoreIndicatorExcellent]} />
+                    <Text style={styles.scoreRange}>75-100</Text>
+                    <View style={styles.scoreLabelContainer}>
+                      <TrendingUp size={12} color="#10B981" strokeWidth={2.5} />
+                      <Text style={[styles.scoreLabel, styles.scoreLabelExcellent]}>Excellent</Text>
+                    </View>
+                  </View>
+                  <View style={styles.scoreGuideItem}>
+                    <View style={[styles.scoreIndicator, styles.scoreIndicatorAverage]} />
+                    <Text style={styles.scoreRange}>50-74</Text>
+                    <View style={styles.scoreLabelContainer}>
+                      <Minus size={12} color="#F59E0B" strokeWidth={2.5} />
+                      <Text style={[styles.scoreLabel, styles.scoreLabelAverage]}>Average</Text>
+                    </View>
+                  </View>
+                  <View style={styles.scoreGuideItem}>
+                    <View style={[styles.scoreIndicator, styles.scoreIndicatorPoor]} />
+                    <Text style={styles.scoreRange}>0-49</Text>
+                    <View style={styles.scoreLabelContainer}>
+                      <TrendingDown size={12} color="#DC2626" strokeWidth={2.5} />
+                      <Text style={[styles.scoreLabel, styles.scoreLabelPoor]}>Needs Attention</Text>
+                    </View>
+                  </View>
+                </View>
               </View>
             </>
           )}
 
         </View>
       </ScrollView>
+
+      {/* Date Range Selector Modal */}
+      <Modal
+        visible={showDateRangeModal}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setShowDateRangeModal(false)}>
+        <TouchableWithoutFeedback onPress={() => setShowDateRangeModal(false)}>
+          <View style={styles.dateModalOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.dateModalContent}>
+                <Text style={styles.dateModalTitle}>Select Date Range</Text>
+                
+                {([
+                  { days: 7, label: 'Last 7 Days' },
+                  { days: 30, label: 'Last 1 Month' },
+                  { days: 180, label: 'Last 6 Months' },
+                  { days: 90, label: 'Last 3 Months' },
+                  { days: 365, label: 'Last 1 Year' }
+                ] as const).map((option) => (
+                  <TouchableOpacity
+                    key={option.days}
+                    style={[
+                      styles.dateModalOption,
+                      forecastDateRange === option.days && styles.dateModalOptionActive
+                    ]}
+                    onPress={() => {
+                      setForecastDateRange(option.days);
+                      setShowDateRangeModal(false);
+                    }}>
+                    <Text style={[
+                      styles.dateModalOptionText,
+                      forecastDateRange === option.days && styles.dateModalOptionTextActive
+                    ]}>
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+
+                <TouchableOpacity
+                  style={styles.dateModalCloseButton}
+                  onPress={() => setShowDateRangeModal(false)}>
+                  <Text style={styles.dateModalCloseButtonText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -717,31 +1036,78 @@ export default function ForecastScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   container: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   content: {
     padding: 16,
     paddingBottom: 40,
   },
 
+  // Chef Hat Refresh Indicator
+  chefHatRefreshOverlayForecast: {
+    position: 'absolute',
+    top: 120,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    zIndex: 1000,
+    gap: 8,
+  },
+  chefHatRefreshContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    backgroundColor: '#F5EDE4',
+    gap: 8,
+  },
+  chefHatRefreshIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFF8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#E8DDD4',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  chefHatRefreshText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8B6F47',
+  },
+
   // Tab Switcher
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F5EDE4',
     marginHorizontal: 16,
     marginTop: 16,
     borderRadius: 12,
     padding: 4,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.10,
+    shadowRadius: 3,
+    elevation: 2,
   },
   tab: {
     flex: 1,
@@ -753,12 +1119,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   tabActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
   },
   tabText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#8B6F47',
+    color: '#6B7280',
   },
   tabTextActive: {
     color: '#FFFFFF',
@@ -773,12 +1139,46 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#000000',
     marginBottom: 4,
   },
   subtitle: {
     fontSize: 15,
+    color: '#000000',
+    fontWeight: '500',
+  },
+
+  // Analysis Stats Cards
+  analysisStatsContainer: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 20,
+  },
+  analysisStatCard: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 14,
+    alignItems: 'center',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 3,
+    borderWidth: 1.5,
+    borderColor: '#C4A07A',
+  },
+  analysisStatValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#5D3A1A',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  analysisStatLabel: {
+    fontSize: 11,
     color: '#8B7355',
+    textAlign: 'center',
     fontWeight: '500',
   },
 
@@ -790,19 +1190,19 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
     marginTop: 16,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 15,
-    color: '#8B7355',
+    color: '#6B7280',
     textAlign: 'center',
     marginBottom: 24,
     paddingHorizontal: 20,
   },
   generateButton: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 28,
@@ -810,6 +1210,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     marginBottom: 24,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 6,
   },
   generateButtonText: {
     color: '#ffffff',
@@ -820,7 +1225,7 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   refreshButton: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F5EDE4',
     borderRadius: 10,
     paddingVertical: 10,
     paddingHorizontal: 16,
@@ -829,33 +1234,38 @@ const styles = StyleSheet.create({
     gap: 6,
     alignSelf: 'flex-start',
     marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderWidth: 2,
+    borderColor: '#8B5A2B',
   },
   refreshButtonText: {
-    color: '#8B6F47',
+    color: '#374151',
     fontSize: 14,
     fontWeight: '600',
   },
 
   // Info Card
   infoCard: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 16,
     width: '100%',
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
   },
   infoTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
     marginBottom: 8,
   },
   infoText: {
     fontSize: 14,
-    color: '#8B7355',
+    color: '#6B7280',
     lineHeight: 22,
   },
 
@@ -902,16 +1312,21 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 14,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
+    borderWidth: 2,
+    borderColor: '#D4BFA8',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.20,
+    shadowRadius: 12,
+    elevation: 5,
   },
   bakingItemUrgent: {
     borderColor: '#DC2626',
-    borderWidth: 2,
+    borderWidth: 3,
   },
   bakingItemNeeded: {
     borderColor: '#F59E0B',
-    borderWidth: 2,
+    borderWidth: 3,
   },
   bakingItemHeader: {
     flexDirection: 'row',
@@ -922,7 +1337,7 @@ const styles = StyleSheet.create({
   bakingItemName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
     flex: 1,
     marginRight: 8,
   },
@@ -943,31 +1358,43 @@ const styles = StyleSheet.create({
   },
   bakingMetric: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: '#EDE4D9',
     borderRadius: 8,
     padding: 10,
     alignItems: 'center',
   },
   bakingMetricLabel: {
     fontSize: 11,
-    color: '#8B7355',
+    color: '#6B7280',
     marginBottom: 2,
   },
   bakingMetricValue: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#1F2937',
   },
   bakingMetricHighlight: {
     flex: 1,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     borderRadius: 8,
     padding: 10,
     alignItems: 'center',
   },
+  bakingMetricReady: {
+    backgroundColor: '#10B981',
+  },
+  bakingMetricNeedsBake: {
+    backgroundColor: '#F59E0B',
+  },
+  bakingMetricOptional: {
+    backgroundColor: '#FBBF24', // Light yellow for optional
+  },
+  bakingMetricNoData: {
+    backgroundColor: '#DC2626',
+  },
   bakingMetricLabelHighlight: {
     fontSize: 11,
-    color: '#E8DCC8',
+    color: '#F5EDE4',
     marginBottom: 2,
   },
   bakingMetricValueHighlight: {
@@ -983,22 +1410,32 @@ const styles = StyleSheet.create({
   reliabilityLabel: {
     fontSize: 12,
     color: '#8B7355',
+    fontWeight: '500',
   },
   reliabilityBar: {
     flex: 1,
     height: 6,
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#E8DDD0',
     borderRadius: 3,
+    overflow: 'hidden',
   },
   reliabilityFill: {
     height: '100%',
-    backgroundColor: '#8B6F47',
     borderRadius: 3,
+  },
+  reliabilityLow: {
+    backgroundColor: '#DC2626',
+  },
+  reliabilityMedium: {
+    backgroundColor: '#F59E0B',
+  },
+  reliabilityHigh: {
+    backgroundColor: '#10B981',
   },
   reliabilityValue: {
     fontSize: 12,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#5D3A1A',
     width: 35,
     textAlign: 'right',
   },
@@ -1010,13 +1447,13 @@ const styles = StyleSheet.create({
   },
   noDataText: {
     fontSize: 12,
-    color: '#8B7355',
+    color: '#6B7280',
     textAlign: 'center',
   },
   sectionTitleSmall: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#8B7355',
+    color: '#6B7280',
     marginBottom: 12,
   },
 
@@ -1026,30 +1463,176 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 14,
     marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#FFE082',
+  },
+  tipHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
   },
   tipTitle: {
     fontSize: 14,
     fontWeight: '600',
     color: '#8B6F47',
-    marginBottom: 6,
   },
   tipText: {
     fontSize: 13,
-    color: '#8B7355',
+    color: '#6B5439',
     lineHeight: 20,
+  },
+
+  // Not Selling Card - Modern Design
+  notSellingCard: {
+    backgroundColor: '#FEF2F2',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  notSellingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 12,
+  },
+  notSellingIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notSellingHeaderText: {
+    flex: 1,
+  },
+  notSellingTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#991B1B',
+    marginBottom: 2,
+  },
+  notSellingSubtitle: {
+    fontSize: 12,
+    color: '#B91C1C',
+    opacity: 0.8,
+  },
+  notSellingProductsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  notSellingProductBadge: {
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#FECACA',
+  },
+  notSellingProductText: {
+    fontSize: 13,
+    fontWeight: '500',
+    color: '#DC2626',
+  },
+
+  // Score Guide Card - Modern Legend Design
+  scoreGuideCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: '#E5E1DB',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  scoreGuideHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F0EB',
+  },
+  scoreGuideTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#8B6F47',
+  },
+  scoreGuideContent: {
+    gap: 10,
+  },
+  scoreGuideItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  scoreIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  scoreIndicatorExcellent: {
+    backgroundColor: '#10B981',
+  },
+  scoreIndicatorAverage: {
+    backgroundColor: '#F59E0B',
+  },
+  scoreIndicatorPoor: {
+    backgroundColor: '#DC2626',
+  },
+  scoreRange: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+    width: 50,
+  },
+  scoreLabelContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  scoreLabel: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  scoreLabelExcellent: {
+    color: '#10B981',
+  },
+  scoreLabelAverage: {
+    color: '#F59E0B',
+  },
+  scoreLabelPoor: {
+    color: '#DC2626',
+  },
+
+  // Section Title with Icon
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+    marginTop: 8,
   },
 
   // Section Title
   sectionTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#6B5439',
-    marginBottom: 4,
-    marginTop: 8,
+    color: '#1F2937',
+    margin: 0,
   },
   sectionHint: {
     fontSize: 12,
-    color: '#8B7355',
+    color: '#6B7280',
     marginBottom: 12,
   },
 
@@ -1072,7 +1655,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#A67B5B',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
@@ -1088,20 +1671,20 @@ const styles = StyleSheet.create({
   },
   chartName: {
     fontSize: 13,
-    color: '#6B5439',
+    color: '#374151',
     fontWeight: '500',
   },
   chartBarContainer: {
     flex: 1,
     height: 20,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#E8D4C1',
     borderRadius: 4,
     marginRight: 8,
     overflow: 'hidden',
   },
   chartBar: {
     height: '100%',
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#10B981',
     borderRadius: 4,
   },
   chartValueContainer: {
@@ -1111,7 +1694,7 @@ const styles = StyleSheet.create({
   chartValue: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#1F2937',
   },
 
   // Insights List
@@ -1126,7 +1709,11 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F3F4F6',
   },
   insightItemExpanded: {
-    backgroundColor: '#FAFAFA',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 14,
+    borderLeftWidth: 4,
+    borderLeftColor: '#10B981',
+    paddingLeft: 10,
   },
   insightItemMain: {
     flexDirection: 'row',
@@ -1140,7 +1727,7 @@ const styles = StyleSheet.create({
   insightItemName: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
     marginBottom: 4,
   },
   insightItemMeta: {
@@ -1159,6 +1746,30 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#E5E7EB',
   },
+  scoreExplanation: {
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 14,
+  },
+  scoreExplanationHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  scoreExplanationScore: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  scoreExplanationRating: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  scoreExplanationText: {
+    fontSize: 12,
+    color: '#4B5563',
+    lineHeight: 18,
+  },
   insightExpandedRow: {
     flexDirection: 'row',
     gap: 12,
@@ -1169,13 +1780,13 @@ const styles = StyleSheet.create({
   },
   insightExpandedLabel: {
     fontSize: 11,
-    color: '#8B7355',
+    color: '#6B7280',
     marginBottom: 4,
   },
   insightExpandedValue: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
   },
   stockStatusBadge: {
     paddingHorizontal: 8,
@@ -1201,7 +1812,7 @@ const styles = StyleSheet.create({
   },
   consistencyText: {
     fontSize: 11,
-    color: '#8B7355',
+    color: '#6B7280',
   },
   trendBadgeUp: {
     flexDirection: 'row',
@@ -1247,7 +1858,7 @@ const styles = StyleSheet.create({
   },
   insightSalesText: {
     fontSize: 12,
-    color: '#8B7355',
+    color: '#6B7280',
   },
   scoreBadge: {
     width: 40,
@@ -1282,13 +1893,78 @@ const styles = StyleSheet.create({
 
   // Empty Card
   emptyCard: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 20,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   emptyCardText: {
     fontSize: 14,
-    color: '#8B7355',
+    color: '#6B7280',
+  },
+
+  // Date Modal
+  dateModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  dateModalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    width: '100%',
+    maxWidth: 300,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+  },
+  dateModalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  dateModalOption: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginBottom: 8,
+    backgroundColor: '#F5EDE4',
+    borderWidth: 1,
+    borderColor: '#C4A07A',
+  },
+  dateModalOptionActive: {
+    backgroundColor: '#8B5A2B',
+    borderColor: '#8B5A2B',
+  },
+  dateModalOptionText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#6B5439',
+    textAlign: 'center',
+  },
+  dateModalOptionTextActive: {
+    color: '#FFFFFF',
+  },
+  dateModalCloseButton: {
+    marginTop: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: '#F3F4F6',
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  dateModalCloseButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
   },
 });
+

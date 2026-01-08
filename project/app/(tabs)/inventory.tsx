@@ -16,17 +16,135 @@ import {
   Platform,
   SafeAreaView,
   Animated,
+  PanResponder,
+  Dimensions,
+  Easing,
 } from 'react-native';
 import { useAuth } from '@/features/auth';
 import { ProductService, InventoryService } from '@/features/inventory';
 import { Product, InventoryWithProduct, getCurrencySymbol, getPermissions } from '@/features/shared';
-import { Plus, Package, AlertTriangle, Edit, Minus, LayoutGrid, List, Image as ImageIcon, Calculator, ChefHat } from 'lucide-react-native';
+import { Plus, Package, AlertTriangle, Edit, Minus, LayoutGrid, List, Image as ImageIcon, Calculator, ChefHat, AlertCircle, X } from 'lucide-react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import ImagePickerButton from '@/components/ImagePickerButton';
 import CostCalculator from '@/components/CostCalculator';
 import RecipeManager from '@/components/RecipeManager';
 import { Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+
+const { width } = Dimensions.get('window');
+
+// Swipeable Alert Component
+const SwipeableAlert = ({ 
+  type, 
+  title, 
+  message, 
+  onDismiss, 
+  onPress, 
+  backgroundColor = '#FEF2F2', 
+  borderColor = '#FCA5A5',
+  iconColor = '#DC6B19',
+  titleColor = '#DC6B19',
+  messageColor = '#DC2626',
+  icon: Icon = AlertCircle
+}: {
+  type: string;
+  title: string;
+  message: string;
+  onDismiss: () => void;
+  onPress: () => void;
+  backgroundColor?: string;
+  borderColor?: string;
+  iconColor?: string;
+  titleColor?: string;
+  messageColor?: string;
+  icon?: any;
+}) => {
+  const translateX = useRef(new Animated.Value(0)).current;
+  const opacity = useRef(new Animated.Value(1)).current;
+  const [dismissed, setDismissed] = useState(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        // Only respond to horizontal swipes (more dx than dy)
+        return Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && gestureState.dx > 5;
+      },
+      onMoveShouldSetPanResponderCapture: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > Math.abs(gestureState.dy) && gestureState.dx > 15;
+      },
+      onPanResponderGrant: () => {
+        // Stop any ongoing animation
+        translateX.stopAnimation();
+      },
+      onPanResponderMove: (_, gestureState) => {
+        // Only allow right swipe
+        if (gestureState.dx > 0) {
+          translateX.setValue(gestureState.dx);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > 80 || (gestureState.dx > 40 && gestureState.vx > 0.5)) {
+          // Swipe threshold reached or fast swipe - dismiss
+          setDismissed(true);
+          Animated.parallel([
+            Animated.timing(translateX, {
+              toValue: width + 50,
+              duration: 150,
+              useNativeDriver: true,
+            }),
+            Animated.timing(opacity, {
+              toValue: 0,
+              duration: 150,
+              useNativeDriver: true,
+            }),
+          ]).start(() => {
+            onDismiss();
+          });
+        } else {
+          // Snap back smoothly
+          Animated.spring(translateX, {
+            toValue: 0,
+            friction: 6,
+            tension: 100,
+            useNativeDriver: true,
+          }).start();
+        }
+      },
+      onPanResponderTerminate: () => {
+        // Snap back if gesture was interrupted
+        Animated.spring(translateX, {
+          toValue: 0,
+          friction: 6,
+          tension: 100,
+          useNativeDriver: true,
+        }).start();
+      },
+    })
+  ).current;
+
+  if (dismissed) return null;
+
+  return (
+    <Animated.View
+      {...panResponder.panHandlers}
+      style={[
+        styles.alertSection,
+        { backgroundColor, borderColor, transform: [{ translateX }], opacity },
+      ]}>
+      <TouchableOpacity style={styles.alertContent} onPress={onPress} activeOpacity={0.7}>
+        <View style={styles.alertHeader}>
+          <Icon size={20} color={iconColor} />
+          <Text style={[styles.alertTitle, { color: titleColor }]}>{title}</Text>
+        </View>
+        <Text style={[styles.alertText, { color: messageColor }]}>{message}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity onPress={onDismiss} style={styles.alertDismissButton}>
+        <Text style={styles.alertDismissText}>×</Text>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+};
 
 export default function InventoryScreen() {
   const { user, profile } = useAuth();
@@ -35,6 +153,14 @@ export default function InventoryScreen() {
   const [inventory, setInventory] = useState<InventoryWithProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
+  const [wasRefreshing, setWasRefreshing] = useState(false);
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const pullProgress = useRef(new Animated.Value(0)).current;
+  const spinningRef = useRef(false);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
+
   const [addProductModalVisible, setAddProductModalVisible] = useState(false);
   const [editProductModalVisible, setEditProductModalVisible] = useState(false);
   const [updateStockModalVisible, setUpdateStockModalVisible] = useState(false);
@@ -77,6 +203,12 @@ export default function InventoryScreen() {
   const [actionSheetVisible, setActionSheetVisible] = useState(false);
   const [actionSheetItem, setActionSheetItem] = useState<InventoryWithProduct | null>(null);
   const [highlightLowStock, setHighlightLowStock] = useState(false);
+  const [highlightOverstock, setHighlightOverstock] = useState(false);
+  const [alertPopup, setAlertPopup] = useState<{visible: boolean; message: string; type: 'low' | 'overstock'}>({
+    visible: false,
+    message: '',
+    type: 'low'
+  });
   const scrollViewRef = useRef<ScrollView>(null);
   const scaleAnims = useRef<{[key: string]: Animated.Value}>({}).current;
 
@@ -96,12 +228,26 @@ export default function InventoryScreen() {
 
   useEffect(() => {
     loadInventory();
+    loadDismissedAlerts();
   }, [user]);
+
+  const loadDismissedAlerts = async () => {
+    try {
+      const stored = await AsyncStorage.getItem('dismissedAlerts');
+      if (stored) {
+        setDismissedAlerts(new Set(JSON.parse(stored)));
+      }
+    } catch (error) {
+      console.error('Error loading dismissed alerts:', error);
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
+      loadInventory();
+      loadDismissedAlerts();
       checkLowStockTrigger();
-    }, [])
+    }, [user])
   );
 
   const checkLowStockTrigger = async () => {
@@ -159,14 +305,94 @@ export default function InventoryScreen() {
       Alert.alert('Error', error.message);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadInventory();
+    setWasRefreshing(true);
+    Animated.spring(pullProgress, {
+      toValue: 1,
+      friction: 8,
+      tension: 60,
+      useNativeDriver: true,
+    }).start();
+
+    Promise.all([loadInventory()]).finally(() => {
+      setTimeout(() => {
+        setRefreshing(false);
+        setWasRefreshing(true);
+        setIsPulling(false);
+        Animated.timing(pullProgress, {
+          toValue: 0,
+          duration: 300,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }).start(() => {
+          setWasRefreshing(false);
+        });
+      }, 500);
+    });
   }, [user]);
+
+  // Chef hat spin animation - only when actively refreshing
+  useEffect(() => {
+    if (refreshing) {
+      if (!spinningRef.current) {
+        spinningRef.current = true;
+        spinValue.setValue(0);
+        Animated.loop(
+          Animated.timing(spinValue, {
+            toValue: 1,
+            duration: 1200,
+            easing: Easing.linear,
+            useNativeDriver: true,
+          })
+        ).start();
+      }
+    } else {
+      spinValue.stopAnimation();
+      spinningRef.current = false;
+    }
+  }, [refreshing]);
+
+  const handleScroll = (event: any) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+
+    // Smoothly animate pull progress based on scroll position
+    if (offsetY < 0 && !refreshing) {
+      const progress = Math.min(Math.abs(offsetY) / 120, 1);
+      Animated.timing(pullProgress, {
+        toValue: progress,
+        duration: 0,
+        useNativeDriver: true,
+      }).start();
+      
+      // Show indicator when pulling down past threshold with hysteresis
+      if (progress > 0.3 && !isPulling) {
+        setIsPulling(true);
+      }
+    } else if (!refreshing) {
+      Animated.spring(pullProgress, {
+        toValue: 0,
+        friction: 10,
+        tension: 60,
+        useNativeDriver: true,
+      }).start();
+    }
+
+    // Hide indicator when scroll position is back near top
+    if (offsetY >= -20 && !refreshing && isPulling) {
+      setIsPulling(false);
+    }
+  };
+
+  // Handle scroll end to reset isPulling when not refreshing
+  const handleScrollEnd = () => {
+    if (!refreshing) {
+      setIsPulling(false);
+    }
+  };
 
   const handleAddProduct = async () => {
     if (!user || !newProduct.name) {
@@ -264,13 +490,9 @@ export default function InventoryScreen() {
         image_url: editProduct.imageUri,
       };
 
-      // Only allow price/cost updates if user has permission
-      if (permissions.canEditPrices) {
-        updates.price = parseFloat(editProduct.price) || 0;
-      }
-      if (permissions.canEditCosts) {
-        updates.cost = parseFloat(editProduct.cost) || 0;
-      }
+      // Update price and cost
+      updates.price = parseFloat(editProduct.price) || 0;
+      updates.cost = parseFloat(editProduct.cost) || 0;
 
       // Update product details
       await ProductService.updateProduct(editProduct.id, updates);
@@ -327,6 +549,12 @@ export default function InventoryScreen() {
     setUpdateStockModalVisible(true);
   };
 
+  const dismissAlert = async (type: 'lowStock' | 'overstock') => {
+    const updated = new Set([...dismissedAlerts, type]);
+    setDismissedAlerts(updated);
+    await AsyncStorage.setItem('dismissedAlerts', JSON.stringify(Array.from(updated)));
+  };
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -342,29 +570,106 @@ export default function InventoryScreen() {
     if (productTypeFilter === 'all') return true;
     return item.product.product_type === productTypeFilter;
   }).sort((a, b) => {
-    // Sort low stock items first
+    // Sort items with alerts first (low stock or overstock)
     const aIsLow = a.quantity <= a.min_threshold;
     const bIsLow = b.quantity <= b.min_threshold;
+    const aIsOverstock = a.quantity > ((a as any).max_threshold ?? 100);
+    const bIsOverstock = b.quantity > ((b as any).max_threshold ?? 100);
+    
+    const aHasAlert = aIsLow || aIsOverstock;
+    const bHasAlert = bIsLow || bIsOverstock;
+    
+    if (aHasAlert && !bHasAlert) return -1;
+    if (!aHasAlert && bHasAlert) return 1;
+    
+    // Within alert items, low stock takes priority
     if (aIsLow && !bIsLow) return -1;
     if (!aIsLow && bIsLow) return 1;
+    
     return 0;
   });
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
+        {/* Chef Hat Refresh Indicator - Outside ScrollView for smooth animation */}
+        <Animated.View
+          style={[
+            styles.chefHatRefreshOverlay,
+            {
+              opacity: pullProgress.interpolate({
+                inputRange: [0, 0.2, 1],
+                outputRange: [0, 1, 1],
+                extrapolate: 'clamp'
+              }),
+              transform: [
+                {
+                  translateY: pullProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-70, 0],
+                    extrapolate: 'clamp'
+                  })
+                }
+              ]
+            }
+          ]}
+        >
+          <Animated.View
+            style={[
+              styles.chefHatRefreshIcon,
+              {
+                transform: [
+                  { 
+                    rotate: refreshing 
+                      ? spinValue.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+                      : pullProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] })
+                  },
+                  {
+                    scale: pullProgress.interpolate({
+                      inputRange: [0, 0.5, 1],
+                      outputRange: [0.7, 0.9, 1],
+                      extrapolate: 'clamp'
+                    })
+                  }
+                ]
+              }
+            ]}
+          >
+            <ChefHat size={24} color="#8B6F47" strokeWidth={2} />
+          </Animated.View>
+          <Text style={styles.chefHatRefreshText}>
+            {(refreshing || wasRefreshing) ? 'Refreshing...' : 'Pull to refresh'}
+          </Text>
+        </Animated.View>
+        
         <ScrollView
           ref={scrollViewRef}
           style={styles.scrollView}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
-        {lowStockItems.length > 0 && (
-          <TouchableOpacity 
-            style={styles.alertSection}
+          onScroll={handleScroll}
+          onScrollEndDrag={handleScrollEnd}
+          onMomentumScrollEnd={handleScrollEnd}
+          scrollEventThrottle={16}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="transparent"
+              colors={['transparent']}
+              progressBackgroundColor="transparent"
+              progressViewOffset={-1000}
+            />
+          }>
+        
+        {lowStockItems.length > 0 && !dismissedAlerts.has('lowStock') && (
+          <SwipeableAlert
+            type="lowStock"
+            title="Low Stock Alert"
+            message={`${lowStockItems.length} item${lowStockItems.length > 1 ? 's' : ''} running low`}
+            onDismiss={() => dismissAlert('lowStock')}
             onPress={() => {
               setHighlightLowStock(true);
               scrollViewRef.current?.scrollTo({ y: 200, animated: true });
               
-              // Animate items
               const lowStockIds = inventory
                 .filter(item => item.quantity <= item.min_threshold)
                 .map(item => item.id);
@@ -394,15 +699,59 @@ export default function InventoryScreen() {
               
               setTimeout(() => setHighlightLowStock(false), 1500);
             }}
-            activeOpacity={0.7}>
-            <View style={styles.alertHeader}>
-              <AlertTriangle size={20} color="#dc2626" />
-              <Text style={styles.alertTitle}>Low Stock Alert</Text>
-            </View>
-            <Text style={styles.alertText}>
-              {lowStockItems.length} item{lowStockItems.length > 1 ? 's' : ''} running low
-            </Text>
-          </TouchableOpacity>
+            iconColor="#dc2626"
+            titleColor="#dc2626"
+            messageColor="#dc2626"
+            icon={AlertTriangle}
+          />
+        )}
+
+        {inventory.filter(item => item.quantity > ((item as any).max_threshold ?? 100)).length > 0 && !dismissedAlerts.has('overstock') && (
+          <SwipeableAlert
+            type="overstock"
+            title="Overstock Alert"
+            message={`${inventory.filter(item => item.quantity > ((item as any).max_threshold ?? 100)).length} item${inventory.filter(item => item.quantity > ((item as any).max_threshold ?? 100)).length > 1 ? 's' : ''} overstocked`}
+            onDismiss={() => dismissAlert('overstock')}
+            onPress={() => {
+              setHighlightOverstock(true);
+              scrollViewRef.current?.scrollTo({ y: 380, animated: true });
+              
+              const overstockIds = inventory
+                .filter(item => item.quantity > ((item as any).max_threshold ?? 100))
+                .map(item => item.id);
+              
+              overstockIds.forEach((id, index) => {
+                if (!scaleAnims[id]) {
+                  scaleAnims[id] = new Animated.Value(1);
+                }
+                
+                Animated.sequence([
+                  Animated.delay(index * 50),
+                  Animated.spring(scaleAnims[id], {
+                    toValue: 1.05,
+                    friction: 3,
+                    tension: 40,
+                    useNativeDriver: true,
+                  }),
+                  Animated.delay(800),
+                  Animated.spring(scaleAnims[id], {
+                    toValue: 1,
+                    friction: 3,
+                    tension: 40,
+                    useNativeDriver: true,
+                  })
+                ]).start();
+              });
+              
+              setTimeout(() => setHighlightOverstock(false), 1500);
+            }}
+            backgroundColor="#EFF6FF"
+            borderColor="#BFDBFE"
+            iconColor="#3b82f6"
+            titleColor="#3b82f6"
+            messageColor="#1e40af"
+            icon={AlertTriangle}
+          />
         )}
 
         <View style={styles.header}>
@@ -455,12 +804,16 @@ export default function InventoryScreen() {
           <View style={styles.gridContainer}>
             {filteredInventory.map((item) => {
               const isLowStock = item.quantity <= item.min_threshold;
+              const isOverstock = item.quantity > ((item as any).max_threshold ?? 100);
               return (
               <Animated.View 
                 key={item.id} 
                 style={[
                   styles.gridItem,
                   isLowStock && {
+                    transform: [{ scale: scaleAnims[item.id] || 1 }],
+                  },
+                  isOverstock && {
                     transform: [{ scale: scaleAnims[item.id] || 1 }],
                   },
                   highlightLowStock && isLowStock && {
@@ -473,13 +826,26 @@ export default function InventoryScreen() {
                     elevation: 8,
                     backgroundColor: '#fff',
                     zIndex: 10,
+                  },
+                  highlightOverstock && isOverstock && {
+                    borderWidth: 2,
+                    borderColor: '#3b82f6',
+                    shadowColor: '#3b82f6',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 8,
+                    elevation: 8,
+                    backgroundColor: '#fff',
+                    zIndex: 10,
                   }
                 ]}>
                 <TouchableOpacity
                   style={styles.gridItemTouchable}
                   onPress={() => {
-                    setActionSheetItem(item);
-                    setActionSheetVisible(true);
+                    if (profile?.current_role === 'admin') {
+                      setActionSheetItem(item);
+                      setActionSheetVisible(true);
+                    }
                   }}>
                   <View style={styles.gridImageContainer}>
                     {item.product?.image_url ? (
@@ -493,13 +859,36 @@ export default function InventoryScreen() {
                       </View>
                     )}
                     {item.quantity <= item.min_threshold && (
-                      <View style={styles.lowStockBadge}>
+                      <TouchableOpacity 
+                        style={styles.lowStockBadge}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          setAlertPopup({
+                            visible: true,
+                            message: `"${item.product?.name}" is running low on stock!`,
+                            type: 'low'
+                          });
+                        }}>
                         <AlertTriangle size={12} color="#fff" />
-                      </View>
+                      </TouchableOpacity>
+                    )}
+                    {isOverstock && (
+                      <TouchableOpacity 
+                        style={[styles.lowStockBadge, { backgroundColor: '#3b82f6' }]}
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          setAlertPopup({
+                            visible: true,
+                            message: `"${item.product?.name}" is overstocked!`,
+                            type: 'overstock'
+                          });
+                        }}>
+                        <AlertTriangle size={12} color="#fff" />
+                      </TouchableOpacity>
                     )}
                   </View>
                   <View style={styles.gridInfo}>
-                    <Text style={styles.gridProductName} numberOfLines={2}>
+                    <Text style={styles.gridProductName} numberOfLines={1} ellipsizeMode="tail">
                       {item.product?.name}
                     </Text>
                     <Text style={styles.gridStock}>
@@ -507,11 +896,6 @@ export default function InventoryScreen() {
                     </Text>
                     <Text style={styles.gridPrice}>{currencySymbol}{Number(item.product?.price).toFixed(2)}</Text>
                   </View>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.gridEditButton}
-                  onPress={() => openEditProduct(item)}>
-                  <Edit size={16} color="#fff" />
                 </TouchableOpacity>
               </Animated.View>
               );
@@ -521,11 +905,15 @@ export default function InventoryScreen() {
           <View style={styles.productList}>
             {filteredInventory.map((item) => {
               const isLowStock = item.quantity <= item.min_threshold;
+              const isOverstock = item.quantity > ((item as any).max_threshold ?? 100);
               return (
               <Animated.View
                 key={item.id}
                 style={[
                   isLowStock && {
+                    transform: [{ scale: scaleAnims[item.id] || 1 }],
+                  },
+                  isOverstock && {
                     transform: [{ scale: scaleAnims[item.id] || 1 }],
                   },
                   highlightLowStock && isLowStock && {
@@ -537,13 +925,25 @@ export default function InventoryScreen() {
                     shadowRadius: 8,
                     elevation: 8,
                     zIndex: 10,
+                  },
+                  highlightOverstock && isOverstock && {
+                    borderWidth: 2,
+                    borderColor: '#3b82f6',
+                    shadowColor: '#3b82f6',
+                    shadowOffset: { width: 0, height: 4 },
+                    shadowOpacity: 0.35,
+                    shadowRadius: 8,
+                    elevation: 8,
+                    zIndex: 10,
                   }
                 ]}>
               <TouchableOpacity
                 style={styles.productCard}
                 onPress={() => {
-                  setActionSheetItem(item);
-                  setActionSheetVisible(true);
+                  if (profile?.current_role === 'admin') {
+                    setActionSheetItem(item);
+                    setActionSheetVisible(true);
+                  }
                 }}>
                 {item.product?.image_url && (
                   <Image
@@ -552,11 +952,12 @@ export default function InventoryScreen() {
                   />
                 )}
                 <View style={styles.productInfo}>
-                  <Text style={styles.productName}>{item.product?.name}</Text>
+                  <Text style={styles.productName} numberOfLines={1} ellipsizeMode="tail">{item.product?.name}</Text>
                   <Text style={styles.productUnit}>{item.product?.unit}</Text>
                   <Text style={styles.productPrice}>{currencySymbol}{Number(item.product?.price).toFixed(2)}</Text>
                 </View>
                 <View style={styles.stockInfo}>
+                  {/* No alert icon for low stock or overstock in list view */}
                   <Text
                     style={[
                       styles.stockQuantity,
@@ -920,33 +1321,25 @@ export default function InventoryScreen() {
                 {editProduct.productType === 'product' && (
                   <View style={styles.inputGroup}>
                     <Text style={styles.inputLabel}>
-                      Selling Price ({currencySymbol}) {permissions.canEditPrices ? '*' : '(View Only)'}
+                      Selling Price ({currencySymbol}) *
                     </Text>
-                    {permissions.canEditPrices ? (
-                      <TextInput
-                        style={styles.input}
-                        placeholder={`e.g., ${currencySymbol}5.00`}
-                        placeholderTextColor="#94a3b8"
-                        value={editProduct.price}
-                        onChangeText={(text) => setEditProduct({ ...editProduct, price: text })}
-                        keyboardType="decimal-pad"
-                      />
-                    ) : (
-                      <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
-                        <Text style={{ fontSize: 16, color: '#6b7280' }}>
-                          {currencySymbol}{editProduct.price || '0.00'}
-                        </Text>
-                      </View>
-                    )}
+                    <TextInput
+                      style={styles.input}
+                      placeholder={`e.g., ${currencySymbol}5.00`}
+                      placeholderTextColor="#94a3b8"
+                      value={editProduct.price}
+                      onChangeText={(text) => setEditProduct({ ...editProduct, price: text })}
+                      keyboardType="decimal-pad"
+                    />
                   </View>
                 )}
 
                 <View style={styles.inputGroup}>
                   <View style={styles.labelWithAction}>
                     <Text style={styles.inputLabel}>
-                      {editProduct.productType === 'product' ? 'Cost Per Unit' : 'Purchase Price'} ({currencySymbol}) - {permissions.canEditCosts ? 'Optional' : 'View Only'}
+                      {editProduct.productType === 'product' ? 'Cost Per Unit' : 'Purchase Price'} ({currencySymbol}) - Optional
                     </Text>
-                    {editProduct.productType === 'product' && permissions.canEditCosts && (
+                    {editProduct.productType === 'product' && (
                       <TouchableOpacity
                         style={styles.calculateCostButton}
                         onPress={() => {
@@ -959,30 +1352,18 @@ export default function InventoryScreen() {
                       </TouchableOpacity>
                     )}
                   </View>
-                  {permissions.canEditCosts ? (
-                    <TextInput
-                      style={styles.input}
-                      placeholder={`e.g., ${currencySymbol}3.00`}
-                      placeholderTextColor="#94a3b8"
-                      value={editProduct.cost}
-                      onChangeText={(text) => setEditProduct({ ...editProduct, cost: text })}
-                      keyboardType="decimal-pad"
-                    />
-                  ) : (
-                    <View style={[styles.input, { backgroundColor: '#f3f4f6' }]}>
-                      <Text style={{ fontSize: 16, color: '#6b7280' }}>
-                        {currencySymbol}{editProduct.cost || '0.00'}
-                      </Text>
-                    </View>
-                  )}
+                  <TextInput
+                    style={styles.input}
+                    placeholder={`e.g., ${currencySymbol}3.00`}
+                    placeholderTextColor="#94a3b8"
+                    value={editProduct.cost}
+                    onChangeText={(text) => setEditProduct({ ...editProduct, cost: text })}
+                    keyboardType="decimal-pad"
+                  />
                   <Text style={styles.helperText}>
-                    {permissions.canEditCosts ? (
-                      editProduct.productType === 'product'
-                        ? 'Optional: Your cost to make this item. Use calculator if needed.'
-                        : 'Optional: How much you pay when buying this ingredient'
-                    ) : (
-                      'Staff cannot edit product costs'
-                    )}
+                    {editProduct.productType === 'product'
+                      ? 'Optional: Your cost to make this item. Use calculator if needed.'
+                      : 'Optional: How much you pay when buying this ingredient'}
                   </Text>
                 </View>
 
@@ -1290,23 +1671,25 @@ export default function InventoryScreen() {
                     </TouchableOpacity>
                   )}
 
-                  <TouchableOpacity
-                    style={styles.actionSheetButton}
-                    onPress={() => {
-                      if (actionSheetItem) {
-                        openEditProduct(actionSheetItem);
-                        setActionSheetVisible(false);
-                        setActionSheetItem(null);
-                      }
-                    }}>
-                    <View style={styles.actionSheetIconContainer}>
-                      <Edit size={24} color="#8B6F47" />
-                    </View>
-                    <View style={styles.actionSheetButtonText}>
-                      <Text style={styles.actionSheetButtonTitle}>Edit Product</Text>
-                      <Text style={styles.actionSheetButtonDesc}>Change name, price, or details</Text>
-                    </View>
-                  </TouchableOpacity>
+                  {permissions.canEditPrices && (
+                    <TouchableOpacity
+                      style={styles.actionSheetButton}
+                      onPress={() => {
+                        if (actionSheetItem) {
+                          openEditProduct(actionSheetItem);
+                          setActionSheetVisible(false);
+                          setActionSheetItem(null);
+                        }
+                      }}>
+                      <View style={styles.actionSheetIconContainer}>
+                        <Edit size={24} color="#8B6F47" />
+                      </View>
+                      <View style={styles.actionSheetButtonText}>
+                        <Text style={styles.actionSheetButtonTitle}>Edit Product</Text>
+                        <Text style={styles.actionSheetButtonDesc}>Change name, price, or details</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
 
                   <TouchableOpacity
                     style={[styles.actionSheetButton, styles.actionSheetButtonCancel]}
@@ -1322,6 +1705,48 @@ export default function InventoryScreen() {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
+
+      {/* Alert Popup Modal */}
+      <Modal
+        visible={alertPopup.visible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setAlertPopup({ ...alertPopup, visible: false })}>
+        <TouchableWithoutFeedback onPress={() => setAlertPopup({ ...alertPopup, visible: false })}>
+          <View style={styles.alertPopupOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={[
+                styles.alertPopupContainer,
+                alertPopup.type === 'low' ? styles.alertPopupLow : styles.alertPopupOverstock
+              ]}>
+                <View style={styles.alertPopupHeader}>
+                  <View style={[
+                    styles.alertPopupIconContainer,
+                    alertPopup.type === 'low' ? styles.alertPopupIconLow : styles.alertPopupIconOverstock
+                  ]}>
+                    <AlertTriangle size={20} color="#fff" />
+                  </View>
+                </View>
+                <Text style={[
+                  styles.alertPopupTitle,
+                  alertPopup.type === 'low' ? styles.alertPopupTitleLow : styles.alertPopupTitleOverstock
+                ]}>
+                  {alertPopup.type === 'low' ? 'Low Stock Alert' : 'Overstock Alert'}
+                </Text>
+                <Text style={styles.alertPopupMessage}>{alertPopup.message}</Text>
+                <TouchableOpacity 
+                  style={[
+                    styles.alertPopupCloseButton,
+                    alertPopup.type === 'low' ? styles.alertPopupCloseButtonLow : styles.alertPopupCloseButtonOverstock
+                  ]}
+                  onPress={() => setAlertPopup({ ...alertPopup, visible: false })}>
+                  <Text style={styles.alertPopupCloseButtonText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
+      </Modal>
       </View>
     </SafeAreaView>
   );
@@ -1330,30 +1755,76 @@ export default function InventoryScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   container: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
     position: 'relative',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   scrollView: {
     flex: 1,
   },
+  // Chef Hat Refresh Indicator - Fixed position overlay
+  chefHatRefreshOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+    zIndex: 1000,
+    backgroundColor: 'transparent',
+  },
+  chefHatRefreshContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    backgroundColor: '#F5EDE4',
+    gap: 8,
+  },
+  chefHatRefreshIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFF8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#E8DDD4',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  chefHatRefreshText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8B6F47',
+  },
   alertSection: {
-    backgroundColor: '#FFE8D6',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#FEF2F2',
     padding: 16,
     margin: 16,
-    marginBottom: 8,
+    marginBottom: 4, // reduced from 8 or 16 to bring alerts closer
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#FFCBA4',
+    borderColor: '#FECACA',
+  },
+  alertContent: {
+    flex: 1,
   },
   alertHeader: {
     flexDirection: 'row',
@@ -1370,6 +1841,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#991b1b',
   },
+  alertDismissButton: {
+    width: 32,
+    height: 32,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 12,
+  },
+  alertDismissText: {
+    fontSize: 28,
+    fontWeight: '300',
+    color: '#666',
+  },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1380,7 +1863,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#2a2a2a',
+    color: '#1F2937',
   },
   headerActions: {
     flexDirection: 'row',
@@ -1395,32 +1878,37 @@ const styles = StyleSheet.create({
   },
   filterTab: {
     flex: 1,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
     borderRadius: 8,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F5EDE4',
     alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   filterTabActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
+    borderColor: '#8B5A2B',
   },
   filterTabText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
+    flexWrap: 'nowrap',
   },
   filterTabTextActive: {
     color: '#ffffff',
   },
   viewToggle: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F5EDE4',
     width: 40,
     height: 40,
     borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderWidth: 2,
+    borderColor: '#8B5A2B',
   },
   fab: {
     position: 'absolute',
@@ -1429,14 +1917,14 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 10,
   },
   emptyState: {
     alignItems: 'center',
@@ -1447,13 +1935,13 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#2a2a2a',
+    color: '#1F2937',
     marginTop: 16,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#6B7280',
     textAlign: 'center',
   },
   productList: {
@@ -1467,11 +1955,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 5,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   productImage: {
     width: 60,
@@ -1494,11 +1984,13 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 16,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 5,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   gridItemTouchable: {
     flex: 1,
@@ -1507,17 +1999,17 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 8,
     left: 8,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#3B82F6',
     borderRadius: 16,
     width: 32,
     height: 32,
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   gridImageContainer: {
     width: '100%',
@@ -1532,7 +2024,7 @@ const styles = StyleSheet.create({
   gridImagePlaceholder: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#E5E7EB',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1553,35 +2045,35 @@ const styles = StyleSheet.create({
   gridProductName: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#2a2a2a',
+    color: '#111827',
     marginBottom: 4,
-    minHeight: 36,
+    minHeight: 18,
   },
   gridStock: {
     fontSize: 12,
-    color: '#6B5439',
+    color: '#6B7280',
     marginBottom: 4,
   },
   gridPrice: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#C89D5E',
+    color: '#059669',
   },
   productName: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#2a2a2a',
+    color: '#111827',
     marginBottom: 4,
   },
   productUnit: {
     fontSize: 12,
-    color: '#6B5439',
+    color: '#6B7280',
     marginBottom: 4,
   },
   productPrice: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#C89D5E',
+    color: '#059669',
   },
   stockInfo: {
     alignItems: 'center',
@@ -1597,7 +2089,7 @@ const styles = StyleSheet.create({
   },
   stockLabel: {
     fontSize: 12,
-    color: '#6B5439',
+    color: '#6B7280',
   },
   editIcon: {
     marginTop: 8,
@@ -1611,21 +2103,23 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalContent: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 24,
     width: '100%',
     maxWidth: 400,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#2a2a2a',
+    color: '#1F2937',
     marginBottom: 8,
   },
   modalSubtitle: {
     fontSize: 16,
-    color: '#6B5439',
+    color: '#6B7280',
     marginBottom: 4,
   },
   currentStock: {
@@ -1635,9 +2129,9 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   input: {
-    backgroundColor: '#f9fafb',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
@@ -1720,14 +2214,14 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingVertical: 4,
     paddingHorizontal: 8,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     borderRadius: 6,
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
   },
   calculateCostButtonText: {
     fontSize: 12,
-    color: '#8B6F47',
+    color: '#374151',
     fontWeight: '500',
   },
   recipeButton: {
@@ -1737,15 +2231,15 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     marginBottom: 16,
   },
   recipeButtonText: {
     fontSize: 14,
-    color: '#8B6F47',
+    color: '#374151',
     fontWeight: '600',
   },
   typeSelector: {
@@ -1757,14 +2251,14 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 16,
     borderRadius: 8,
-    backgroundColor: '#f3f4f6',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    backgroundColor: '#F5EDE4',
+    borderWidth: 2,
+    borderColor: '#C4A07A',
     alignItems: 'center',
   },
   typeButtonActive: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#2563eb',
+    backgroundColor: '#8B5A2B',
+    borderColor: '#8B5A2B',
   },
   typeButtonText: {
     fontSize: 14,
@@ -1772,7 +2266,7 @@ const styles = StyleSheet.create({
     color: '#6b7280',
   },
   typeButtonTextActive: {
-    color: '#2563eb',
+    color: '#FFFFFF',
   },
   helperText: {
     fontSize: 12,
@@ -1783,9 +2277,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
     borderRadius: 8,
     padding: 12,
     marginBottom: 8,
@@ -1799,9 +2293,9 @@ const styles = StyleSheet.create({
     color: '#6b7280',
   },
   unitPickerDropdown: {
-    backgroundColor: '#ffffff',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#8B5A2B',
     borderRadius: 8,
     maxHeight: 200,
     marginBottom: 12,
@@ -1815,14 +2309,14 @@ const styles = StyleSheet.create({
     borderBottomColor: '#f3f4f6',
   },
   unitOptionSelected: {
-    backgroundColor: '#eff6ff',
+    backgroundColor: '#F5E6D3',
   },
   unitOptionText: {
     fontSize: 16,
     color: '#374151',
   },
   unitOptionTextSelected: {
-    color: '#2563eb',
+    color: '#8B5A2B',
     fontWeight: '600',
   },
   customOptionText: {
@@ -1883,24 +2377,25 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: 12,
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    borderWidth: 2,
+    borderColor: '#C4A07A',
     alignItems: 'center',
+    backgroundColor: '#F5EDE4',
   },
   cancelButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#374151',
   },
   saveButton: {
     flex: 1,
     padding: 12,
     borderRadius: 8,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     alignItems: 'center',
   },
   saveButtonDisabled: {
-    backgroundColor: '#C4AA8C',
+    backgroundColor: '#9CA3AF',
     opacity: 0.7,
   },
   saveButtonText: {
@@ -1926,7 +2421,7 @@ const styles = StyleSheet.create({
   },
   closeButton: {
     fontSize: 28,
-    color: '#6B5439',
+    color: '#6B7280',
     fontWeight: '300',
   },
   searchContainer: {
@@ -2001,7 +2496,7 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   actionSheetContainer: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingBottom: 40,
@@ -2009,17 +2504,17 @@ const styles = StyleSheet.create({
   actionSheetHeader: {
     padding: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#D4BA9C',
+    borderBottomColor: '#E5E7EB',
   },
   actionSheetTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#1F2937',
     marginBottom: 4,
   },
   actionSheetSubtitle: {
     fontSize: 14,
-    color: '#8B7355',
+    color: '#6B7280',
   },
   actionSheetButtons: {
     padding: 16,
@@ -2031,8 +2526,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     padding: 16,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderWidth: 2,
+    borderColor: '#C4A07A',
     gap: 16,
   },
   actionSheetIconContainer: {
@@ -2049,23 +2544,23 @@ const styles = StyleSheet.create({
   actionSheetButtonTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#1F2937',
     marginBottom: 2,
   },
   actionSheetButtonDesc: {
     fontSize: 13,
-    color: '#8B7355',
+    color: '#6B7280',
   },
   actionSheetButtonCancel: {
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
     justifyContent: 'center',
-    borderColor: '#D4BA9C',
+    borderColor: '#C4A07A',
     marginTop: 8,
   },
   actionSheetCancelText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#8B6F47',
+    color: '#374151',
     textAlign: 'center',
   },
   quantityControls: {
@@ -2074,25 +2569,119 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   quantityButton: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     width: 44,
     height: 44,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#D4BA9C',
+       borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   quantityInput: {
     flex: 1,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     borderRadius: 8,
     padding: 12,
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
-    color: '#1e293b',
+    color: '#1F2937',
+   },
+  alertPopupOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  alertPopupContainer: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 20,
+    width: '85%',
+    maxWidth: 320,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 8,
+    borderWidth: 2,
+  },
+  alertPopupLow: {
+    borderColor: '#FECACA',
+  },
+  alertPopupOverstock: {
+    borderColor: '#BFDBFE',
+  },
+  alertPopupHeader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  alertPopupIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  alertPopupIconLow: {
+    backgroundColor: '#DC2626',
+  },
+  alertPopupIconOverstock: {
+    backgroundColor: '#3b82f6',
+  },
+  alertPopupClose: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  alertPopupCloseText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
+  alertPopupTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  alertPopupTitleLow: {
+    color: '#DC2626',
+  },
+  alertPopupTitleOverstock: {
+    color: '#3b82f6',
+  },
+  alertPopupMessage: {
+    fontSize: 14,
+    color: '#4B5563',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  alertPopupCloseButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  alertPopupCloseButtonLow: {
+    backgroundColor: '#DC2626',
+  },
+  alertPopupCloseButtonOverstock: {
+    backgroundColor: '#3b82f6',
+  },
+  alertPopupCloseButtonText: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

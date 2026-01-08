@@ -17,18 +17,25 @@ import {
   Platform,
   SafeAreaView,
   Switch,
+  Easing,
 } from 'react-native';
-import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '@/features/auth';
 import { SalesService } from '@/features/sales';
 import { ProductService, InventoryService } from '@/features/inventory';
 import { SaleWithProduct, Product, InventoryWithProduct, getCurrencySymbol } from '@/features/shared';
-import { Plus, ShoppingBag, Calendar, Trash2, Check, Minus, ChevronLeft, ChevronRight } from 'lucide-react-native';
+import { Plus, ShoppingBag, Calendar, Trash2, Check, Minus, ChevronLeft, ChevronRight, Edit3, ChefHat } from 'lucide-react-native';
 
 function formatLongDate(date: Date): string {
   const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
   return `${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+}
+
+// Parse YYYY-MM-DD date string to local Date object (avoids UTC timezone issues)
+function parseDateToLocal(dateStr: string): Date {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function formatTime12Hour(timeString: string): string {
@@ -65,6 +72,11 @@ export default function SalesScreen() {
   const [inventory, setInventory] = useState<InventoryWithProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [wasRefreshing, setWasRefreshing] = useState(false);
+  const [isPulling, setIsPulling] = useState(false);
+  const spinValue = useRef(new Animated.Value(0)).current;
+  const pullProgress = useRef(new Animated.Value(0)).current;
+  const spinningRef = useRef(false);
   const [filterMode, setFilterMode] = useState<'today' | 'month' | 'year'>('today');
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -72,10 +84,11 @@ export default function SalesScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showDayPicker, setShowDayPicker] = useState(false);
   const [addSaleModalVisible, setAddSaleModalVisible] = useState(false);
-  const [editMode, setEditMode] = useState(false);
   const [editSaleModalVisible, setEditSaleModalVisible] = useState(false);
   const [selectedSale, setSelectedSale] = useState<SaleWithProduct | null>(null);
-  const swipeableRefs = useRef<{ [key: string]: Swipeable | null }>({});
+  const [longPressedSale, setLongPressedSale] = useState<string | null>(null);
+  const [saleActionSheetVisible, setSaleActionSheetVisible] = useState(false);
+  const [actionSheetSale, setActionSheetSale] = useState<SaleWithProduct | null>(null);
   const [newSale, setNewSale] = useState({
     product_id: '',
     quantity: '',
@@ -95,26 +108,7 @@ export default function SalesScreen() {
   const [salesCountByDay, setSalesCountByDay] = useState<{[key: number]: number}>({});
   const [showMonthYearPicker, setShowMonthYearPicker] = useState(false);
 
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [user, filterMode, selectedMonth, selectedYear, selectedDay])
-  );
-
-  useEffect(() => {
-    loadData();
-  }, [user, filterMode, selectedMonth, selectedYear, selectedDay]);
-
-  useEffect(() => {
-    // Close all swipeable when edit mode is turned off
-    if (!editMode) {
-      Object.values(swipeableRefs.current).forEach(ref => {
-        ref?.close();
-      });
-    }
-  }, [editMode]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user) return;
     try {
       let salesData;
@@ -178,14 +172,92 @@ export default function SalesScreen() {
       Alert.alert('Error', error.message);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
-  };
+  }, [user, filterMode, selectedMonth, selectedYear, selectedDay]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadData();
-  }, [user]);
+    setWasRefreshing(true);
+    Animated.spring(pullProgress, {
+      toValue: 1,
+      friction: 8,
+      tension: 60,
+      useNativeDriver: true,
+    }).start();
+    
+    loadData().finally(() => {
+      setTimeout(() => {
+        setRefreshing(false);
+        setIsPulling(false);
+        Animated.timing(pullProgress, {
+          toValue: 0,
+          duration: 300,
+          easing: Easing.out(Easing.ease),
+          useNativeDriver: true,
+        }).start(() => {
+          setWasRefreshing(false);
+        });
+      }, 500);
+    });
+  }, [loadData]);
+
+  // Chef hat spin animation - only when refreshing
+  useEffect(() => {
+    if (refreshing) {
+      if (!spinningRef.current) {
+        spinningRef.current = true;
+        spinValue.setValue(0);
+        Animated.loop(
+          Animated.timing(spinValue, {
+            toValue: 1,
+            duration: 1000,
+            easing: Easing.linear,
+            useNativeDriver: true,
+          })
+        ).start();
+      }
+    } else {
+      spinValue.stopAnimation();
+      spinningRef.current = false;
+    }
+  }, [refreshing]);
+
+  // Track scroll position for interactive pull
+  const handleScroll = (event: any) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    
+    if (offsetY < 0 && !refreshing) {
+      const progress = Math.min(Math.abs(offsetY) / 100, 1);
+      pullProgress.setValue(progress);
+      
+      if (!isPulling && progress > 0.1) {
+        setIsPulling(true);
+      }
+    }
+  };
+
+  // Handle scroll end - hide indicator if not refreshing
+  const handleScrollEnd = () => {
+    if (!refreshing && isPulling) {
+      setIsPulling(false);
+      Animated.timing(pullProgress, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.out(Easing.ease),
+        useNativeDriver: true,
+      }).start();
+    }
+  };
 
   const goToPreviousMonth = () => {
     if (selectedMonth === 0) {
@@ -283,7 +355,7 @@ export default function SalesScreen() {
 
   const handleEditSale = (sale: SaleWithProduct) => {
     // Check if sale is from today or admin mode is enabled
-    const saleDate = new Date(sale.sale_date);
+    const saleDate = parseDateToLocal(sale.sale_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     saleDate.setHours(0, 0, 0, 0);
@@ -369,7 +441,7 @@ export default function SalesScreen() {
 
   const handleDeleteSale = (sale: SaleWithProduct) => {
     // Check if sale is from today or admin mode is enabled
-    const saleDate = new Date(sale.sale_date);
+    const saleDate = parseDateToLocal(sale.sale_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     saleDate.setHours(0, 0, 0, 0);
@@ -397,7 +469,6 @@ export default function SalesScreen() {
             try {
               await SalesService.deleteSale(sale.id);
               setEditSaleModalVisible(false);
-              setEditMode(false);
               loadData();
               Alert.alert('Success', 'Sale deleted successfully');
             } catch (error: any) {
@@ -438,9 +509,72 @@ export default function SalesScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <GestureHandlerRootView style={styles.container}>
+        {/* Chef Hat Refresh Indicator - Outside ScrollView for smooth animation */}
+        <Animated.View
+          style={[
+            styles.chefHatRefreshOverlay,
+            {
+              opacity: pullProgress.interpolate({
+                inputRange: [0, 0.2, 1],
+                outputRange: [0, 1, 1],
+                extrapolate: 'clamp'
+              }),
+              transform: [
+                {
+                  translateY: pullProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-70, 0],
+                    extrapolate: 'clamp'
+                  })
+                }
+              ]
+            }
+          ]}
+        >
+          <Animated.View
+            style={[
+              styles.chefHatRefreshIcon,
+              {
+                transform: [
+                  { 
+                    rotate: refreshing 
+                      ? spinValue.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] })
+                      : pullProgress.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] })
+                  },
+                  {
+                    scale: pullProgress.interpolate({
+                      inputRange: [0, 0.5, 1],
+                      outputRange: [0.7, 0.9, 1],
+                      extrapolate: 'clamp'
+                    })
+                  }
+                ]
+              }
+            ]}
+          >
+            <ChefHat size={24} color="#8B6F47" strokeWidth={2} />
+          </Animated.View>
+          <Text style={styles.chefHatRefreshText}>
+            {(refreshing || wasRefreshing) ? 'Refreshing...' : 'Pull to refresh'}
+          </Text>
+        </Animated.View>
+        
         <ScrollView
           style={styles.scrollView}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
+          onScroll={handleScroll}
+          onScrollEndDrag={handleScrollEnd}
+          onMomentumScrollEnd={handleScrollEnd}
+          scrollEventThrottle={16}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor="transparent"
+              colors={['transparent']}
+              progressBackgroundColor="transparent"
+              progressViewOffset={-1000}
+            />
+          }>
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <View>
@@ -452,15 +586,6 @@ export default function SalesScreen() {
                 {filterMode === 'year' && `Year ${selectedYear}`}
               </Text>
             </View>
-            {sales.length > 0 && canAddOrEdit && (
-              <TouchableOpacity
-                style={[styles.editButton, editMode && styles.editButtonActive]}
-                onPress={() => setEditMode(!editMode)}>
-                <Text style={[styles.editButtonText, editMode && styles.editButtonTextActive]}>
-                  {editMode ? 'Done' : 'Edit'}
-                </Text>
-              </TouchableOpacity>
-            )}
           </View>
 
           <View style={styles.filterTabs}>
@@ -619,71 +744,43 @@ export default function SalesScreen() {
             </Text>
             {sales.map((sale) => {
               // Check if this specific sale can be edited
-              const saleDate = new Date(sale.sale_date);
+              const saleDate = parseDateToLocal(sale.sale_date);
               const today = new Date();
               today.setHours(0, 0, 0, 0);
               saleDate.setHours(0, 0, 0, 0);
               const isToday = saleDate.getTime() === today.getTime();
               const canEdit = isToday || (profile?.current_role === 'admin');
-
-              const renderRightActions = (progress: Animated.AnimatedInterpolation<number>, dragX: Animated.AnimatedInterpolation<number>) => {
-                const trans = dragX.interpolate({
-                  inputRange: [-100, 0],
-                  outputRange: [0, 100],
-                  extrapolate: 'clamp',
-                });
-
-                return (
-                  <Animated.View
-                    style={[
-                      styles.swipeDeleteContainer,
-                      {
-                        transform: [{ translateX: trans }],
-                      },
-                    ]}>
-                    <TouchableOpacity
-                      style={styles.swipeDeleteButton}
-                      onPress={() => {
-                        swipeableRefs.current[sale.id]?.close();
-                        handleDeleteSale(sale);
-                      }}>
-                      <Trash2 size={24} color="#ffffff" />
-                      <Text style={styles.swipeDeleteText}>Delete</Text>
-                    </TouchableOpacity>
-                  </Animated.View>
-                );
-              };
+              const isLongPressed = longPressedSale === sale.id;
 
               return (
-                <Swipeable
+                <TouchableOpacity
                   key={sale.id}
-                  ref={(ref) => { swipeableRefs.current[sale.id] = ref; }}
-                  renderRightActions={editMode && canEdit ? renderRightActions : undefined}
-                  enabled={editMode && canEdit}
-                  friction={2}
-                  rightThreshold={40}>
-                  <TouchableOpacity
-                    style={[styles.saleCard, editMode && styles.saleCardEditMode]}
-                    onPress={() => editMode && handleEditSale(sale)}
-                    disabled={!editMode}
-                    activeOpacity={editMode ? 0.7 : 1}>
-                    <View style={styles.saleInfo}>
-                      <Text style={styles.saleName}>{sale.product?.name}</Text>
-                      <Text style={styles.saleDetails}>
-                        {`${sale.quantity} × ${currencySymbol}${Number(sale.unit_price).toFixed(2)}`}
-                      </Text>
-                      <Text style={styles.saleTime}>
-                        {formatTime12Hour(sale.sale_time)}
-                      </Text>
-                      {sale.notes && (
-                        <Text style={styles.saleNotes} numberOfLines={1}>{sale.notes}</Text>
-                      )}
-                    </View>
-                    <View style={styles.saleRight}>
-                      <Text style={styles.saleAmount} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{Number(sale.total_amount).toFixed(2)}</Text>
-                    </View>
-                  </TouchableOpacity>
-                </Swipeable>
+                  style={[styles.saleCard, isLongPressed && styles.saleCardEditMode]}
+                  onLongPress={() => {
+                    if (canEdit) {
+                      setLongPressedSale(sale.id);
+                      setActionSheetSale(sale);
+                      setSaleActionSheetVisible(true);
+                    }
+                  }}
+                  delayLongPress={400}
+                  activeOpacity={0.7}>
+                  <View style={styles.saleInfo}>
+                    <Text style={styles.saleName}>{sale.product?.name}</Text>
+                    <Text style={styles.saleDetails}>
+                      {`${sale.quantity} × ${currencySymbol}${Number(sale.unit_price).toFixed(2)}`}
+                    </Text>
+                    <Text style={styles.saleTime}>
+                      {formatTime12Hour(sale.sale_time)}
+                    </Text>
+                    {sale.notes && (
+                      <Text style={styles.saleNotes} numberOfLines={1}>{sale.notes}</Text>
+                    )}
+                  </View>
+                  <View style={styles.saleRight}>
+                    <Text style={styles.saleAmount} numberOfLines={1} adjustsFontSizeToFit>{currencySymbol}{Number(sale.total_amount).toFixed(2)}</Text>
+                  </View>
+                </TouchableOpacity>
               );
             })}
           </View>
@@ -952,40 +1049,6 @@ export default function SalesScreen() {
                   </View>
                 )}
 
-                {profile?.current_role === 'admin' && (
-                  <View style={styles.inputGroup}>
-                    <View style={styles.adminModeHeader}>
-                      <Text style={styles.adminModeLabel}>Admin: Custom Date/Time</Text>
-                      <Switch
-                        value={showCustomDateInput}
-                        onValueChange={setShowCustomDateInput}
-                        trackColor={{ false: '#D4BA9C', true: '#C89D5E' }}
-                        thumbColor={showCustomDateInput ? '#8B6F47' : '#F5E6D3'}
-                      />
-                    </View>
-                    {showCustomDateInput && (
-                      <>
-                        <Text style={styles.inputLabel}>Sale Date (YYYY-MM-DD)</Text>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="2024-11-15"
-                          placeholderTextColor="#94a3b8"
-                          value={customDate}
-                          onChangeText={setCustomDate}
-                        />
-                        <Text style={styles.inputLabel}>Sale Time (HH:MM:SS)</Text>
-                        <TextInput
-                          style={styles.input}
-                          placeholder="14:30:00"
-                          placeholderTextColor="#94a3b8"
-                          value={customTime}
-                          onChangeText={setCustomTime}
-                        />
-                      </>
-                    )}
-                  </View>
-                )}
-
                 <View style={styles.inputGroup}>
                   <Text style={styles.inputLabel}>Notes (Optional)</Text>
                   <TextInput
@@ -1024,6 +1087,72 @@ export default function SalesScreen() {
           </TouchableWithoutFeedback>
         </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Sale Action Sheet Modal */}
+      <Modal
+        visible={saleActionSheetVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => {
+          setSaleActionSheetVisible(false);
+          setLongPressedSale(null);
+          setActionSheetSale(null);
+        }}>
+        <TouchableWithoutFeedback onPress={() => {
+          setSaleActionSheetVisible(false);
+          setLongPressedSale(null);
+          setActionSheetSale(null);
+        }}>
+          <View style={styles.actionSheetOverlay}>
+            <TouchableWithoutFeedback>
+              <View style={styles.actionSheetContent}>
+                <View style={styles.actionSheetHeader}>
+                  <Text style={styles.actionSheetTitle}>{actionSheetSale?.product?.name}</Text>
+                  <Text style={styles.actionSheetSubtitle}>
+                    {actionSheetSale ? `${actionSheetSale.quantity} × ${currencySymbol}${Number(actionSheetSale.unit_price).toFixed(2)}` : ''}
+                  </Text>
+                </View>
+                
+                <TouchableOpacity
+                  style={styles.actionSheetButton}
+                  onPress={() => {
+                    setSaleActionSheetVisible(false);
+                    setLongPressedSale(null);
+                    if (actionSheetSale) {
+                      handleEditSale(actionSheetSale);
+                    }
+                  }}>
+                  <Edit3 size={20} color="#8B5A2B" />
+                  <Text style={styles.actionSheetButtonText}>Edit Sale</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={[styles.actionSheetButton, styles.actionSheetButtonDanger]}
+                  onPress={() => {
+                    setSaleActionSheetVisible(false);
+                    setLongPressedSale(null);
+                    if (actionSheetSale) {
+                      handleDeleteSale(actionSheetSale);
+                    }
+                  }}>
+                  <Trash2 size={20} color="#DC2626" />
+                  <Text style={[styles.actionSheetButtonText, styles.actionSheetButtonTextDanger]}>Delete Sale</Text>
+                </TouchableOpacity>
+                
+                <TouchableOpacity
+                  style={styles.actionSheetCancelButton}
+                  onPress={() => {
+                    setSaleActionSheetVisible(false);
+                    setLongPressedSale(null);
+                    setActionSheetSale(null);
+                  }}>
+                  <Text style={styles.actionSheetCancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </TouchableWithoutFeedback>
+          </View>
+        </TouchableWithoutFeedback>
       </Modal>
 
       {/* Edit Sale Modal */}
@@ -1198,21 +1327,60 @@ export default function SalesScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   container: {
     flex: 1,
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
     position: 'relative',
   },
   centerContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#E8DCC8',
+    backgroundColor: '#F5EDE4',
   },
   scrollView: {
     flex: 1,
+  },
+  // Chef Hat Refresh Indicator - Fixed position overlay
+  chefHatRefreshOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+    zIndex: 1000,
+    backgroundColor: 'transparent',
+  },
+  chefHatRefreshContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    gap: 8,
+  },
+  chefHatRefreshIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#FFF8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#E8DDD4',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  chefHatRefreshText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#8B6F47',
   },
   header: {
     padding: 16,
@@ -1227,19 +1395,26 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#2a2a2a',
+    color: '#1F2937',
   },
   date: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#6B7280',
     marginTop: 4,
   },
   filterTabs: {
     flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F5EDE4',
     borderRadius: 12,
     padding: 4,
     gap: 4,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.10,
+    shadowRadius: 3,
+    elevation: 2,
   },
   filterTab: {
     flex: 1,
@@ -1252,12 +1427,12 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   filterTabActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
   },
   filterTabText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
   },
   filterTabTextActive: {
     color: '#FFFFFF',
@@ -1269,14 +1444,14 @@ const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.4,
+    shadowRadius: 10,
+    elevation: 10,
   },
   datePickerOverlay: {
     flex: 1,
@@ -1286,12 +1461,14 @@ const styles = StyleSheet.create({
     padding: 20,
   },
   datePickerContent: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FDF8F3',
     borderRadius: 20,
     padding: 24,
     width: '100%',
     maxWidth: 400,
     maxHeight: '80%',
+    borderWidth: 1,
+    borderColor: '#E8D5C4',
   },
   datePickerTitle: {
     fontSize: 20,
@@ -1314,12 +1491,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   monthButtonActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
   },
   monthButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
   },
   monthButtonTextActive: {
     color: '#FFFFFF',
@@ -1337,12 +1514,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   yearButtonActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
   },
   yearButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
   },
   yearButtonTextActive: {
     color: '#FFFFFF',
@@ -1362,7 +1539,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   dayButtonActive: {
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
   },
   dayButtonDisabled: {
     backgroundColor: '#E8E8E8',
@@ -1370,13 +1547,13 @@ const styles = StyleSheet.create({
   dayButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
   },
   dayButtonTextActive: {
     color: '#FFFFFF',
   },
   dayButtonTextToday: {
-    color: '#C89D5E',
+    color: '#8B5A2B',
     fontWeight: '700',
   },
   dayButtonTextDisabled: {
@@ -1391,7 +1568,7 @@ const styles = StyleSheet.create({
   datePickerCloseText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#374151',
   },
   statsContainer: {
     flexDirection: 'row',
@@ -1401,24 +1578,28 @@ const styles = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    backgroundColor: '#D4BA9C',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
+    borderLeftWidth: 4,
+    borderLeftColor: '#8B5A2B',
   },
   statValue: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#2a2a2a',
+    color: '#1F2937',
     marginBottom: 4,
   },
   statLabel: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#6B7280',
   },
   emptyState: {
     alignItems: 'center',
@@ -1429,22 +1610,23 @@ const styles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#2a2a2a',
+    color: '#1F2937',
     marginTop: 16,
     marginBottom: 8,
   },
   emptyText: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#6B7280',
     textAlign: 'center',
   },
   salesList: {
     padding: 16,
+    paddingHorizontal: 20,
   },
   sectionTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#2a2a2a',
+    color: '#1F2937',
     marginBottom: 12,
   },
   saleCard: {
@@ -1455,11 +1637,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowColor: '#5D3A1A',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+    borderWidth: 2,
+    borderColor: '#C4A07A',
   },
   saleInfo: {
     flex: 1,
@@ -1472,12 +1656,12 @@ const styles = StyleSheet.create({
   },
   saleDetails: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#6B7280',
     marginBottom: 4,
   },
   saleTime: {
     fontSize: 12,
-    color: '#8B7355',
+    color: '#9CA3AF',
   },
   saleRight: {
     alignItems: 'flex-end',
@@ -1486,7 +1670,7 @@ const styles = StyleSheet.create({
   saleAmount: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#C89D5E',
+    color: '#059669',
   },
   deleteButton: {
     padding: 4,
@@ -1497,12 +1681,14 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   modalContent: {
-    backgroundColor: '#ffffff',
+    backgroundColor: '#FFFFFF',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     paddingTop: 24,
     paddingHorizontal: 24,
     maxHeight: '90%',
+    borderWidth: 2,
+    borderColor: '#C4A87A',
   },
   modalTitle: {
     fontSize: 24,
@@ -1552,9 +1738,9 @@ const styles = StyleSheet.create({
     color: '#92400E',
   },
   input: {
-    backgroundColor: '#f9fafb',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2,
+    borderColor: '#D1D5DB',
     borderRadius: 8,
     padding: 12,
     fontSize: 16,
@@ -1567,8 +1753,8 @@ const styles = StyleSheet.create({
   productPicker: {
     maxHeight: 200,
     marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+    borderWidth: 2,
+    borderColor: '#C4A87A',
     borderRadius: 8,
   },
   productOption: {
@@ -1587,7 +1773,7 @@ const styles = StyleSheet.create({
   productOptionName: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#2a2a2a',
+    color: '#1F2937',
   },
   productOptionNameSelected: {
     color: '#8B6F47',
@@ -1595,7 +1781,7 @@ const styles = StyleSheet.create({
   },
   productOptionPrice: {
     fontSize: 14,
-    color: '#6B5439',
+    color: '#6B7280',
     marginTop: 2,
   },
   productStockInfo: {
@@ -1611,30 +1797,30 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   quantityButton: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     width: 44,
     height: 44,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
   },
   quantityInput: {
     flex: 1,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
     borderRadius: 8,
     padding: 12,
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
-    color: '#2a2a2a',
+    color: '#1F2937',
   },
   quantityHelperText: {
     fontSize: 12,
-    color: '#6B5439',
+    color: '#6B7280',
   },
   stockBadge: {
     backgroundColor: '#d1fae5',
@@ -1675,7 +1861,7 @@ const styles = StyleSheet.create({
   },
   selectedProductLabel: {
     fontSize: 12,
-    color: '#6B5439',
+    color: '#6B7280',
     marginBottom: 4,
   },
   selectedProductText: {
@@ -1732,17 +1918,17 @@ const styles = StyleSheet.create({
   cancelButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#374151',
   },
   saveButton: {
     flex: 1,
     padding: 16,
     borderRadius: 8,
-    backgroundColor: '#8B6F47',
+    backgroundColor: '#8B5A2B',
     alignItems: 'center',
   },
   saveButtonDisabled: {
-    backgroundColor: '#C4AA8C',
+    backgroundColor: '#9CA3AF',
     opacity: 0.6,
   },
   saveButtonText: {
@@ -1756,21 +1942,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   editButton: {
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
   },
   editButtonActive: {
-    backgroundColor: '#8B6F47',
-    borderColor: '#8B6F47',
+    backgroundColor: '#A67B5B',
+    borderColor: '#A67B5B',
   },
   editButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#374151',
   },
   editButtonTextActive: {
     color: '#ffffff',
@@ -1797,12 +1983,74 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
   saleCardEditMode: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 8,
-    transform: [{ scale: 1.02 }],
+    shadowColor: '#8B5A2B',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 10,
+    borderColor: '#8B5A2B',
+    transform: [{ translateY: -4 }],
+  },
+  actionSheetOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  actionSheetContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 34,
+    paddingHorizontal: 20,
+  },
+  actionSheetHeader: {
+    alignItems: 'center',
+    paddingBottom: 16,
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  actionSheetTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  actionSheetSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  actionSheetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#F5EDE4',
+    marginTop: 8,
+    gap: 12,
+  },
+  actionSheetButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#5D3A1A',
+  },
+  actionSheetButtonDanger: {
+    backgroundColor: '#FEF2F2',
+  },
+  actionSheetButtonTextDanger: {
+    color: '#DC2626',
+  },
+  actionSheetCancelButton: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    marginTop: 12,
+  },
+  actionSheetCancelText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#6B7280',
   },
   swipeDeleteContainer: {
     justifyContent: 'center',
@@ -1848,17 +2096,17 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E8DCC8',
+    borderBottomColor: '#E5E7EB',
   },
   monthNavButton: {
     padding: 8,
     borderRadius: 8,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
   },
   calendarMonthTitle: {
     fontSize: 18,
     fontWeight: '700',
-    color: '#6B5439',
+    color: '#1F2937',
   },
   weekDaysRow: {
     flexDirection: 'row',
@@ -1869,7 +2117,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontSize: 12,
     fontWeight: '600',
-    color: '#8B7355',
+    color: '#9CA3AF',
   },
   calendarGrid: {
     flexDirection: 'row',
@@ -1892,19 +2140,19 @@ const styles = StyleSheet.create({
   calendarDayText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#3a3a3a',
+    color: '#374151',
   },
   calendarDayTextToday: {
     color: '#8B6F47',
     fontWeight: '700',
   },
   calendarDayTextDisabled: {
-    color: '#A89176',
+    color: '#D1D5DB',
   },
   salesDot: {
     position: 'absolute',
     bottom: 4,
-    backgroundColor: '#DC6B19',
+    backgroundColor: '#C89D5E',
     borderRadius: 4,
     width: 8,
     height: 8,
@@ -1912,7 +2160,7 @@ const styles = StyleSheet.create({
   calendarHint: {
     textAlign: 'center',
     fontSize: 12,
-    color: '#8B7355',
+    color: '#9CA3AF',
     marginTop: 12,
     fontStyle: 'italic',
   },
@@ -1928,13 +2176,13 @@ const styles = StyleSheet.create({
     marginTop: 12,
     paddingVertical: 8,
     paddingHorizontal: 16,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     borderRadius: 8,
     alignItems: 'center',
   },
   clearSelectionText: {
     fontSize: 13,
-    color: '#8B6F47',
+    color: '#374151',
     fontWeight: '600',
   },
   monthYearPickerContainer: {
@@ -1944,7 +2192,7 @@ const styles = StyleSheet.create({
   pickerSectionTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
     marginTop: 16,
     marginBottom: 8,
   },
@@ -1956,10 +2204,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 10,
     marginRight: 8,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
   },
   yearChipActive: {
     backgroundColor: '#8B6F47',
@@ -1968,7 +2216,7 @@ const styles = StyleSheet.create({
   yearChipText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#6B7280',
   },
   yearChipTextActive: {
     color: '#FFFFFF',
@@ -1977,7 +2225,7 @@ const styles = StyleSheet.create({
     opacity: 0.3,
   },
   monthButtonTextDisabled: {
-    color: '#A89176',
+    color: '#D1D5DB',
   },
   pickerActions: {
     flexDirection: 'row',
@@ -1988,11 +2236,11 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
     paddingHorizontal: 16,
-    backgroundColor: '#F5E6D3',
+    backgroundColor: '#F3F4F6',
     borderRadius: 8,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#D4BA9C',
+    borderColor: '#E5E7EB',
   },
   pickerActionButtonPrimary: {
     backgroundColor: '#8B6F47',
@@ -2001,7 +2249,7 @@ const styles = StyleSheet.create({
   pickerActionText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#6B5439',
+    color: '#374151',
   },
   pickerActionTextPrimary: {
     color: '#FFFFFF',
